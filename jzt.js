@@ -1,16 +1,16 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  快捷搜索制造令/机规/通知单工具
-// @author       10432987111
+// @version      1.4
+// @description  快捷查询制造令/机规/通知单
+// @author       10432987
 // @match        http://10.16.88.34/notice/
 // @match        http://10.16.88.34/zzl/
 // @match        http://10.16.88.34/jigui/
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
-// @require      https://cdn.jsdelivr.net/gh/bestmike007/gbk-lite@master/lib/gbk-lite.min.js
+// @require      https://cdn.jsdelivr.net/gh/bestmike007/gbk-lite@4e604273c8b3b3e8731b4452f8dad5ee6c588e92/lib/gbk-lite.min.js
 // @downloadURL  https://gh.sevencdn.com/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
 // @updateURL    https://gh.sevencdn.com/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
 // ==/UserScript==
@@ -1700,21 +1700,18 @@
             top += (this.detailPanels.size * offset) % 200;
             left += (this.detailPanels.size * offset) % 200;
 
-            // 确保位置在屏幕可见范围内
+            // 确保位置：顶部严格限制在窗口内，左右可拖出但至少30px在窗口内
             const windowWidth = window.innerWidth || 1920;
             const windowHeight = window.innerHeight || 1080;
+            const dragBackMargin = 30;
             const panelWidth = savedState ? savedState.width : defaultWidth;
             const panelHeight = savedState ? savedState.height : defaultHeight;
 
-            // 调整位置，确保在屏幕内
-            if (left + panelWidth > windowWidth) {
-                left = Math.max(10, windowWidth - panelWidth - 10);
-            }
-            if (top + panelHeight > windowHeight) {
-                top = Math.max(10, windowHeight - panelHeight - 10);
-            }
-            if (left < 0) left = 10;
+            // 顶部：严格限制在窗口内
+            if (top + panelHeight > windowHeight) top = Math.max(10, windowHeight - panelHeight - 10);
             if (top < 0) top = 10;
+            // 左右：可拖出，但至少30px留在窗口内
+            left = Math.max(dragBackMargin - panelWidth, Math.min(windowWidth - dragBackMargin, left));
 
             // 获取新的z-index
             this.maxZIndex += 1;
@@ -1943,14 +1940,23 @@
                     detailPanel.style.setProperty('height', defaultHeight + 'px', 'important');
                 }
 
-                // 检查弹窗是否在视口内
+                // 检查弹窗位置：顶部限制在视口内，左右可拖出但至少30px在视口内
                 const viewportWidth = window.innerWidth;
                 const viewportHeight = window.innerHeight;
+                const dragBackMargin = 30;
 
-                // 如果弹窗不在视口内，调整位置
-                if (rect.right > viewportWidth || rect.bottom > viewportHeight || rect.left < 0 || rect.top < 0) {
-                    let newLeft = Math.max(10, Math.min(rect.left, viewportWidth - rect.width - 10));
-                    let newTop = Math.max(10, Math.min(rect.top, viewportHeight - rect.height - 10));
+                let needAdjust = false;
+                let newLeft = rect.left;
+                let newTop = rect.top;
+                if (rect.top < 0 || rect.top + rect.height > viewportHeight) {
+                    newTop = Math.max(10, Math.min(rect.top, viewportHeight - rect.height - 10));
+                    needAdjust = true;
+                }
+                if (rect.left + rect.width < dragBackMargin || rect.left > viewportWidth - dragBackMargin) {
+                    newLeft = Math.max(dragBackMargin - rect.width, Math.min(viewportWidth - dragBackMargin, rect.left));
+                    needAdjust = true;
+                }
+                if (needAdjust) {
                     detailPanel.style.setProperty('left', newLeft + 'px', 'important');
                     detailPanel.style.setProperty('top', newTop + 'px', 'important');
                 }
@@ -2101,13 +2107,14 @@
                     // 将 transform 转换为实际的 top/left 值（使用 requestAnimationFrame 确保在下一帧执行）
                     requestAnimationFrame(() => {
                         const margin = 8;
+                        const dragBackMargin = 30; // 左右可拖出窗口，但至少留30px在窗口内便于通过标题栏拖回
                         const w = window.innerWidth;
                         const h = window.innerHeight;
                         const rect = panel.getBoundingClientRect();
                         let topVal = originalTopValue + currentDeltaY;
                         let leftVal = originalLeftValue + currentDeltaX;
-                        topVal = Math.max(margin, Math.min(h - rect.height - margin, topVal));
-                        leftVal = Math.max(margin, Math.min(w - rect.width - margin, leftVal));
+                        topVal = Math.max(margin, Math.min(h - rect.height - margin, topVal)); // 顶部严格限制在窗口内
+                        leftVal = Math.max(dragBackMargin - rect.width, Math.min(w - dragBackMargin, leftVal)); // 左右可拖出，至少30px可见
                         const finalTop = topVal + 'px';
                         const finalLeft = leftVal + 'px';
                         panel.style.setProperty('top', finalTop, 'important');
@@ -2142,13 +2149,14 @@
                     e.preventDefault();
                     e.stopPropagation();
                     const margin = 8;
+                    const dragBackMargin = 30; // 左右可拖出窗口，但至少留30px在窗口内便于通过标题栏拖回
                     const w = window.innerWidth;
                     const h = window.innerHeight;
                     const rect = panel.getBoundingClientRect();
                     let desiredTop = originalTopValue + (e.clientY - startY);
                     let desiredLeft = originalLeftValue + (e.clientX - startX);
-                    desiredTop = Math.max(margin, Math.min(h - rect.height - margin, desiredTop));
-                    desiredLeft = Math.max(margin, Math.min(w - rect.width - margin, desiredLeft));
+                    desiredTop = Math.max(margin, Math.min(h - rect.height - margin, desiredTop)); // 顶部严格限制在窗口内
+                    desiredLeft = Math.max(dragBackMargin - rect.width, Math.min(w - dragBackMargin, desiredLeft)); // 左右可拖出，至少30px可见
                     currentDeltaX = desiredLeft - originalLeftValue;
                     currentDeltaY = desiredTop - originalTopValue;
                 };
@@ -2267,12 +2275,7 @@
                     contentIframe.style.setProperty('flex', '1', 'important');
                     contentIframe.style.setProperty('width', '100%', 'important');
                     contentIframe.style.setProperty('height', '100%', 'important');
-                    // 强制重新加载 iframe，避免恢复后内容空白
-                    const src = contentIframe.src;
-                    if (src && src !== 'about:blank') {
-                        contentIframe.src = 'about:blank';
-                        setTimeout(() => { contentIframe.src = src; }, 50);
-                    }
+                    // 不重新加载 iframe，保留用户已填写的内容（创建通知单、创建制造令、创建机规等表单）
                 }
 
                 // 显示调整大小手柄
@@ -2543,11 +2546,7 @@
                         contentIframe.style.setProperty('flex', '1', 'important');
                         contentIframe.style.setProperty('width', '100%', 'important');
                         contentIframe.style.setProperty('height', '100%', 'important');
-                        const src = contentIframe.src;
-                        if (src && src !== 'about:blank') {
-                            contentIframe.src = 'about:blank';
-                            setTimeout(() => { contentIframe.src = src; }, 50);
-                        }
+                        // 不重新加载 iframe，保留用户已填写的内容（创建通知单、创建制造令、创建机规等表单）
                     }
                     const resizeHandle = panel.querySelector('.detail-resize-handle');
                     if (resizeHandle) {
@@ -2556,19 +2555,20 @@
                     panel.style.setProperty('background', 'white', 'important');
                 }
 
-                // 确保窗口在屏幕可见范围内，并在下一帧再次确保 iframe 可见（避免内容区空白）
+                // 确保窗口在屏幕可见范围内，并在下一帧再次确保 iframe 可见
                 requestAnimationFrame(() => {
                     const rect = panel.getBoundingClientRect();
                     const windowWidth = window.innerWidth;
                     const windowHeight = window.innerHeight;
+                    const dragBackMargin = 30; // 左右可拖出窗口，但至少留30px在窗口内便于通过标题栏拖回
                     let adjustedLeft = parseFloat(panel.style.left) || rect.left;
                     let adjustedTop = parseFloat(panel.style.top) || rect.top;
 
-                    if (adjustedLeft + rect.width < 0) adjustedLeft = 10;
-                    else if (adjustedLeft > windowWidth) adjustedLeft = windowWidth - rect.width - 10;
-                    else if (adjustedLeft + rect.width > windowWidth) adjustedLeft = windowWidth - rect.width - 10;
-                    else if (adjustedLeft < 0) adjustedLeft = 10;
+                    // 左右：可拖出窗口，但至少30px留在窗口内
+                    if (adjustedLeft + rect.width < dragBackMargin) adjustedLeft = dragBackMargin - rect.width;
+                    else if (adjustedLeft > windowWidth - dragBackMargin) adjustedLeft = windowWidth - dragBackMargin;
 
+                    // 顶部：严格限制在窗口内
                     if (adjustedTop + rect.height < 0) adjustedTop = 10;
                     else if (adjustedTop > windowHeight) adjustedTop = windowHeight - rect.height - 10;
                     else if (adjustedTop + rect.height > windowHeight) adjustedTop = windowHeight - rect.height - 10;
@@ -3175,16 +3175,16 @@
                     // 验证状态是否有效
                     if (state && typeof state.top === 'number' && typeof state.left === 'number' &&
                         typeof state.width === 'number' && typeof state.height === 'number') {
-                        // 确保窗口在屏幕可见范围内
+                        // 确保位置：顶部严格限制在窗口内，左右可拖出但至少30px在窗口内
                         const windowWidth = window.innerWidth;
                         const windowHeight = window.innerHeight;
+                        const dragBackMargin = 30;
                         const minWidth = 300;
                         const minHeight = 200;
 
-                        // 调整位置和大小，确保在屏幕内
                         let top = Math.max(0, Math.min(state.top, windowHeight - minHeight));
-                        let left = Math.max(0, Math.min(state.left, windowWidth - minWidth));
-                        let width = Math.max(minWidth, Math.min(state.width, windowWidth - left));
+                        let left = Math.max(dragBackMargin - state.width, Math.min(windowWidth - dragBackMargin, state.left));
+                        let width = Math.max(minWidth, state.width);
                         let height = Math.max(minHeight, Math.min(state.height, windowHeight - top));
 
                         return { top, left, width, height };
