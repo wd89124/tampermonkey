@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  快捷搜索制造令/机规/通知单工具
-// @author       10432987
+// @author       10432987111
 // @match        http://10.16.88.34/notice/
 // @match        http://10.16.88.34/zzl/
 // @match        http://10.16.88.34/jigui/
