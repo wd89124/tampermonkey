@@ -18,23 +18,6 @@
 (function() {
     'use strict';
 
-    // 全局配置：集中可调项，便于后续优化与开关
-    const CONFIG = {
-        panel: { defaultTop: 50, defaultLeft: 50 },
-        // 统一用于“并发拉取多页”的参数
-        pageFetch: { concurrency: 6, initialPages: 6 }
-    };
-
-    // 调试开关：默认关闭；需要时可在控制台执行 localStorage.setItem('jigui_debug','1')
-    const DEBUG = (() => {
-        try { return localStorage.getItem('jigui_debug') === '1'; } catch (e) { return false; }
-    })();
-
-    // 避免生产环境控制台刷屏：console.log 受 DEBUG 控制
-    if (typeof console !== 'undefined' && console && typeof console.log === 'function' && !DEBUG) {
-        try { console.log = function () {}; } catch (e) {}
-    }
-
     // 修复 WdatePicker.js 的 unload 弃用警告：在页面上下文中最早注入补丁（在 WdatePicker 之前执行）
     (function injectUnloadPatch() {
         const code = function() {
@@ -91,9 +74,6 @@
             this.bodyOverflowState = null; // 保存body的overflow状态
             this.htmlOverflowState = null; // 保存html的overflow状态
             this.isDragging = false; // 是否正在拖拽搜索图标按钮
-
-            // gbk-lite(@require) 注入后全局可能存在 GBK；缓存一次判断结果
-            this.gbkLiteAvailable = typeof GBK !== 'undefined';
         }
 
         create() {
@@ -101,8 +81,8 @@
 
             // 从 localStorage 加载保存的搜索按钮位置
             const savedPanelState = this.loadPanelState();
-            const defaultTop = CONFIG.panel.defaultTop;
-            const defaultLeft = CONFIG.panel.defaultLeft;
+            const defaultTop = 50;
+            const defaultLeft = 50;
 
             const panel = document.createElement('div');
             panel.id = 'jigui-float-panel';
@@ -243,34 +223,6 @@
                 searchOptionsContainer: panel.querySelector('#search-options-container')
             };
 
-            // 缓存搜索单选按钮引用，减少频繁 querySelector
-            this._els.radios = {
-                zhilingGonghao: panel.querySelector('#zhiling-gonghao'),
-                zhilingUser: panel.querySelector('#zhiling-user'),
-                jiguiGonghao: panel.querySelector('#jigui-gonghao'),
-                jiguiNumber: panel.querySelector('#jigui-number'),
-                jiguiPicname: panel.querySelector('#jigui-picname'),
-                jiguiWritename: panel.querySelector('#jigui-writename'),
-                tongzhiNumber: panel.querySelector('#tongzhi-number'),
-                tongzhiProductGonghao: panel.querySelector('#tongzhi-product-gonghao'),
-                tongzhiServiceGonghao: panel.querySelector('#tongzhi-service-gonghao'),
-                tongzhiPicname: panel.querySelector('#tongzhi-picname'),
-                tongzhiWritename: panel.querySelector('#tongzhi-writename')
-            };
-            this._els.allRadios = [
-                this._els.radios.zhilingGonghao,
-                this._els.radios.zhilingUser,
-                this._els.radios.jiguiGonghao,
-                this._els.radios.jiguiNumber,
-                this._els.radios.jiguiPicname,
-                this._els.radios.jiguiWritename,
-                this._els.radios.tongzhiNumber,
-                this._els.radios.tongzhiProductGonghao,
-                this._els.radios.tongzhiServiceGonghao,
-                this._els.radios.tongzhiPicname,
-                this._els.radios.tongzhiWritename
-            ];
-
             // 确保面板显示
             this.panel.style.setProperty('display', 'flex', 'important');
             this.panel.style.setProperty('visibility', 'visible', 'important');
@@ -375,22 +327,21 @@
         }
 
         updateSearchOptions(tab) {
-            // 使用缓存的单选按钮引用
-            const radios = this._els && this._els.radios ? this._els.radios : {};
-            const zhilingGonghao = radios.zhilingGonghao;
-            const zhilingUser = radios.zhilingUser;
-            const jiguiGonghao = radios.jiguiGonghao;
-            const jiguiNumber = radios.jiguiNumber;
-            const jiguiPicname = radios.jiguiPicname;
-            const jiguiWritename = radios.jiguiWritename;
-            const tongzhiNumber = radios.tongzhiNumber;
-            const tongzhiProductGonghao = radios.tongzhiProductGonghao;
-            const tongzhiServiceGonghao = radios.tongzhiServiceGonghao;
-            const tongzhiPicname = radios.tongzhiPicname;
-            const tongzhiWritename = radios.tongzhiWritename;
+            // 获取所有单选按钮元素
+            const zhilingGonghao = this.panel.querySelector('#zhiling-gonghao');
+            const zhilingUser = this.panel.querySelector('#zhiling-user');
+            const jiguiGonghao = this.panel.querySelector('#jigui-gonghao');
+            const jiguiNumber = this.panel.querySelector('#jigui-number');
+            const jiguiPicname = this.panel.querySelector('#jigui-picname');
+            const jiguiWritename = this.panel.querySelector('#jigui-writename');
+            const tongzhiNumber = this.panel.querySelector('#tongzhi-number');
+            const tongzhiProductGonghao = this.panel.querySelector('#tongzhi-product-gonghao');
+            const tongzhiServiceGonghao = this.panel.querySelector('#tongzhi-service-gonghao');
+            const tongzhiPicname = this.panel.querySelector('#tongzhi-picname');
+            const tongzhiWritename = this.panel.querySelector('#tongzhi-writename');
 
             // 重置所有单选按钮
-            const allRadios = this._els && this._els.allRadios ? this._els.allRadios : [
+            const allRadios = [
                 zhilingGonghao, zhilingUser,
                 jiguiGonghao, jiguiNumber, jiguiPicname, jiguiWritename,
                 tongzhiNumber, tongzhiProductGonghao, tongzhiServiceGonghao, tongzhiPicname, tongzhiWritename
@@ -1048,106 +999,46 @@
                 });
         }
 
-        // 并发池：最多 limit 个任务同时执行，保证真正并发（避免环境串行化）
-        _runWithConcurrencyLimit(tasks, limit) {
-            const results = [];
-            let nextIndex = 0;
-            let running = 0;
-            return new Promise((resolve, reject) => {
-                const runOne = () => {
-                    if (nextIndex >= tasks.length && running === 0) {
-                        resolve(results);
-                        return;
+        // 搜索所有页面的结果
+        searchJiguiAllPages(content, searchType) {
+            return this.searchJiguiPage(content, searchType, 1)
+                .then(first => {
+                    const totalPages = first.totalPages || 1;
+                    const allRows = (first.rows || []).slice();
+                    const allHeaders = first.headers;
+                    const totalCount = first.totalCount || allRows.length;
+                    const pageSize = first.pageSize;
+
+                    if (searchType !== 'gonghao' || totalPages <= 1) {
+                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: 1, pageSize: pageSize };
                     }
-                    while (running < limit && nextIndex < tasks.length) {
-                        const i = nextIndex++;
-                        running++;
-                        tasks[i]().then(
-                            value => { results[i] = value; running--; runOne(); },
-                            err => { running--; reject(err); }
+
+                    let chain = Promise.resolve();
+                    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+                        chain = chain.then(() =>
+                            this.searchJiguiPage(content, searchType, pageNum, { quiet: true })
+                                .then(pageResult => {
+                                    console.log('第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
+                                    allRows.push(...pageResult.rows);
+                                })
+                                .catch(error => {
+                                    console.error('第 ' + pageNum + ' 页获取失败:', error);
+                                })
                         );
                     }
-                };
-                runOne();
-            });
-        }
 
-        // 搜索所有页面的结果（按工号：第1页与第2~6页同时进并发池，再视总页数拉取剩余页）
-        searchJiguiAllPages(content, searchType) {
-            const self = this;
-            const CONCURRENCY = CONFIG.pageFetch.concurrency;
-            const INITIAL_PAGES = CONFIG.pageFetch.initialPages;
-            return new Promise((resolve, reject) => {
-                if (searchType !== 'gonghao') {
-                    self.searchJiguiPage(content, searchType, 1)
-                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1, pageSize: first.pageSize }))
-                        .catch(reject);
-                    return;
-                }
-                const initialTasks = [];
-                for (let pageNum = 1; pageNum <= INITIAL_PAGES; pageNum++) {
-                    initialTasks.push(() =>
-                        self.searchJiguiPage(content, searchType, pageNum, pageNum === 1 ? undefined : { quiet: true })
-                            .then(res => ({ pageNum, res }))
-                            .catch(err => ({ pageNum, res: null, err }))
-                    );
-                }
-                console.log('[机规] 第 1~' + INITIAL_PAGES + ' 页同时进并发池，共 ' + INITIAL_PAGES + ' 个请求');
-                self._runWithConcurrencyLimit(initialTasks, CONCURRENCY)
-                    .then(initialResults => {
-                        const firstRes = initialResults[0] && initialResults[0].res;
-                        if (!firstRes) return Promise.reject(initialResults[0] && initialResults[0].err || new Error('第1页获取失败'));
-                        const totalPages = firstRes.totalPages;
-                        const totalCount = firstRes.totalCount;
-                        const pageSizeFromFirst = firstRes.pageSize;
-                        const allHeaders = firstRes.headers;
-                        let allRows = [];
-                        const useCount = Math.min(totalPages, INITIAL_PAGES);
-                        for (let i = 0; i < useCount; i++) {
-                            const r = initialResults[i] && initialResults[i].res;
-                            if (r && r.rows) allRows = allRows.concat(r.rows);
-                        }
-                        console.log('第 1~' + useCount + ' 页获取完成，总页数: ' + totalPages + '，当前共 ' + allRows.length + ' 条');
-
-                        if (totalPages <= INITIAL_PAGES) {
-                            console.log('所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
-                        }
-                        const restCount = totalPages - INITIAL_PAGES;
-                        console.log('[机规] 使用并发池拉取第 ' + (INITIAL_PAGES + 1) + ' 至 ' + totalPages + ' 页，共 ' + restCount + ' 页');
-                        const tasks = [];
-                        for (let pageNum = INITIAL_PAGES + 1; pageNum <= totalPages; pageNum++) {
-                            tasks.push(() =>
-                                self.searchJiguiPage(content, searchType, pageNum, { quiet: true })
-                                    .then(pageResult => {
-                                        console.log('第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
-                                        return { pageNum, rows: pageResult.rows };
-                                    })
-                                    .catch(error => {
-                                        console.error('第 ' + pageNum + ' 页获取失败:', error);
-                                        return { pageNum, rows: [] };
-                                    })
-                            );
-                        }
-                        return self._runWithConcurrencyLimit(tasks, CONCURRENCY).then(restResults => {
-                            restResults.sort((a, b) => a.pageNum - b.pageNum);
-                            restResults.forEach(r => { allRows = allRows.concat(r.rows); });
-                            console.log('所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
-                        });
-                    })
-                    .then(resolve)
-                    .catch(reject);
-            });
+                    return chain.then(() => {
+                        console.log('所有页面获取完成，共 ' + allRows.length + ' 条数据');
+                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSize };
+                    });
+                });
         }
 
         // GBK 编码：机规系统使用 GBK/GB2312，搜索参数需与直接搜索一致
         // 优先使用 gbk-lite（@require）对全部文字正确编码；不可用时回退
         encodeGBK(str) {
             if (!str) return '';
-            // 缓存 gbk-lite 是否可用，避免每次 encode 都重复判断
-            if (!this.gbkLiteAvailable && typeof GBK !== 'undefined') this.gbkLiteAvailable = true;
-            if (this.gbkLiteAvailable) {
+            if (typeof GBK !== 'undefined') {
                 try {
                     const bytes = GBK.toBytes(GBK.fromString(str));
                     return bytes.map(b => '%' + (b & 0xFF).toString(16).toUpperCase().padStart(2, '0')).join('');
@@ -1285,18 +1176,12 @@
             let pageSize = 0;
 
             const strip = (s) => this.stripAllTags(s);
+            const htmlPlain = strip(html);
 
-            // 分页区：尽量只 strip 分页片段，避免对“大页面 HTML”做全量 strip
+            // 分页区：含 "页次：1/4页 共75篇文章 20篇文章/页" 的片段（先取 raw 再去标签，避免标签打断匹配）
+            let blockPlain = htmlPlain;
             const blockRaw = html.match(/页次[：:][\s\S]{0,400}/) || html.match(/(?:>>\s*分页|&gt;&gt;\s*分页|首页|尾页)[\s\S]{0,500}/);
-            let blockPlain = '';
-            let htmlPlain = null;
-            if (blockRaw && blockRaw[0]) {
-                blockPlain = strip(blockRaw[0]);
-            } else {
-                // 无法定位分页片段时退化为对全文 strip
-                htmlPlain = strip(html);
-                blockPlain = htmlPlain;
-            }
+            if (blockRaw && blockRaw[0]) blockPlain = strip(blockRaw[0]);
 
             // 优先：精确匹配 "页次：1/4页 共75篇文章 20篇文章/页"（总页数、总条数、每页条数一次取出）
             const exact = blockPlain.match(/页次[：:]\s*\d+\s*\/\s*(\d+)\s*页\s+共\s*(\d+)\s*篇(?:\s*文章)?\s+(\d+)\s*篇(?:\s*文章)?\s*\/\s*页/) ||
@@ -1318,11 +1203,7 @@
                     { re: /共\s*(\d+)\s*(?:条|篇\s*文章|篇文章)\s*\/\s*(\d+)\s*页/, totalCountIdx: 1, totalPagesIdx: 2 }
                 ];
                 for (const { re, totalPagesIdx, totalCountIdx } of pageInfoPatterns) {
-                    let m = blockPlain.match(re);
-                    if (!m) {
-                        if (!htmlPlain) htmlPlain = strip(html);
-                        m = htmlPlain.match(re);
-                    }
+                    const m = blockPlain.match(re) || htmlPlain.match(re);
                     if (m) {
                         if (totalPagesIdx != null) totalPages = parseInt(m[totalPagesIdx], 10) || totalPages;
                         if (totalCountIdx != null) totalCount = parseInt(m[totalCountIdx], 10) || totalCount;
@@ -1358,10 +1239,7 @@
                 }
             };
             parseCountAndPageSize(blockPlain, '分页区');
-            if (totalCount <= 0 || pageSize <= 0) {
-                if (!htmlPlain) htmlPlain = strip(html);
-                parseCountAndPageSize(htmlPlain, '全页');
-            }
+            if (totalCount <= 0 || pageSize <= 0) parseCountAndPageSize(htmlPlain, '全页');
 
             if (!quiet) console.log('分页解析结果: totalPages=' + totalPages + ', totalCount=' + totalCount + ', pageSize=' + pageSize);
 
@@ -1497,15 +1375,12 @@
 
             // 所有模块：只要有搜索结果就显示分页模块（含仅一页的情况）
             const showPagination = results.length > 0 && totalPages >= 1;
-            // 如未来出现“一次性渲染超大结果集”的需求，可考虑引入虚拟滚动或仅渲染当前页 DOM；
-            // 当前实现已通过分页减少一次性 DOM 重排压力。
 
             // 使用flex布局，确保分页控件在底部
-            const htmlParts = [];
-            htmlParts.push('<div style="display: flex; flex-direction: column; height: 100%; min-height: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">');
+            let html = '<div style="display: flex; flex-direction: column; height: 100%; min-height: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
 
             // 表格容器，占据剩余空间，确保可以滚动显示所有内容
-            htmlParts.push('<div style="flex: 1; overflow-x: auto; overflow-y: auto; min-height: 0; position: relative; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;"><table style="border-collapse: collapse; font-size: 14px; white-space: nowrap; width: auto; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">');
+            html += '<div style="flex: 1; overflow-x: auto; overflow-y: auto; min-height: 0; position: relative; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;"><table style="border-collapse: collapse; font-size: 14px; white-space: nowrap; width: auto; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
 
             // 添加表头
             // 查找"部件名称"列的索引
@@ -1531,7 +1406,7 @@
                 }
             }
             headerParts.push('</tr>');
-            htmlParts.push(headerParts.join(''));
+            html += headerParts.join('');
 
             let numberColumnIndex = -1;
             let userColumnIndex = -1;
@@ -1580,7 +1455,7 @@
                 }
                 rowParts.push('<tr style="border-bottom: 1px solid #999;">' + cellParts.join('') + '</tr>');
             });
-            htmlParts.push(rowParts.join('') + '</table></div>');
+            html += rowParts.join('') + '</table></div>';
 
             // 在页面最下方添加分页控件（如果显示）
             if (showPagination) {
@@ -1593,34 +1468,34 @@
                 const nextActive = currentPage < totalPages;
                 const lastActive = currentPage < totalPages;
 
-                htmlParts.push('<div class="jigui-pagination" style="margin-top: 12px; padding: 8px 0; font-size: 15px; color: #333; display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex-wrap: nowrap; white-space: nowrap; flex-shrink: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">');
-                htmlParts.push(firstActive
+                html += '<div class="jigui-pagination" style="margin-top: 12px; padding: 8px 0; font-size: 15px; color: #333; display: flex; align-items: center; justify-content: flex-end; gap: 4px; flex-wrap: nowrap; white-space: nowrap; flex-shrink: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
+                html += firstActive
                     ? '<a href="javascript:void(0)" class="jigui-page-link" data-page="1" style="' + linkStyle + '">首页</a>'
-                    : '<span style="' + inactiveStyle + '">首页</span>');
-                htmlParts.push(sep);
-                htmlParts.push(prevActive
+                    : '<span style="' + inactiveStyle + '">首页</span>';
+                html += sep;
+                html += prevActive
                     ? '<a href="javascript:void(0)" class="jigui-page-link" data-page="' + (currentPage - 1) + '" style="' + linkStyle + '">上一页</a>'
-                    : '<span style="' + inactiveStyle + '">上一页</span>');
-                htmlParts.push(sep);
-                htmlParts.push(nextActive
+                    : '<span style="' + inactiveStyle + '">上一页</span>';
+                html += sep;
+                html += nextActive
                     ? '<a href="javascript:void(0)" class="jigui-page-link" data-page="' + (currentPage + 1) + '" style="' + linkStyle + '">下一页</a>'
-                    : '<span style="' + inactiveStyle + '">下一页</span>');
-                htmlParts.push(sep);
-                htmlParts.push(lastActive
+                    : '<span style="' + inactiveStyle + '">下一页</span>';
+                html += sep;
+                html += lastActive
                     ? '<a href="javascript:void(0)" class="jigui-page-link" data-page="' + totalPages + '" style="' + linkStyle + '">尾页</a>'
-                    : '<span style="' + inactiveStyle + '">尾页</span>');
-                htmlParts.push('<span style="margin-left: 8px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">页次：<span style="color: #c00; font-weight: bold; margin: 0 2px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;\">' + currentPage + '</span> / ' + totalPages + ' 页</span>');
-                htmlParts.push('<span style="margin-left: 8px; color: #666; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;\">共 ' + totalCount + ' 条</span>');
+                    : '<span style="' + inactiveStyle + '">尾页</span>';
+                html += '<span style="margin-left: 8px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">页次：<span style="color: #c00; font-weight: bold; margin: 0 2px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">' + currentPage + '</span> / ' + totalPages + ' 页</span>';
+                html += '<span style="margin-left: 8px; color: #666; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">共 ' + totalCount + ' 条</span>';
                 if (pageSize > 0) {
-                    htmlParts.push('<span style="margin-left: 8px; color: #666; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;\">' + pageSize + ' 条/页</span>');
+                    html += '<span style="margin-left: 8px; color: #666; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">' + pageSize + ' 条/页</span>';
                 }
-                htmlParts.push('<span style="margin-left: 8px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;\">转到：</span>');
-                htmlParts.push('<input type="number" class="jigui-goto-page" min="1" max="' + totalPages + '" value="' + currentPage + '" style="width: 50px; padding: 2px 4px; border: 1px solid #ccc; border-radius: 2px; font-size: 14px; flex-shrink: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">');
-                htmlParts.push('<button class="jigui-goto-btn" style="padding: 2px 8px; margin-left: 4px; background: #808080; color: white; border: none; border-radius: 2px; cursor: pointer; font-size: 14px; flex-shrink: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;\">Goto</button>');
-                htmlParts.push('</div>');
+                html += '<span style="margin-left: 8px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">转到：</span>';
+                html += '<input type="number" class="jigui-goto-page" min="1" max="' + totalPages + '" value="' + currentPage + '" style="width: 50px; padding: 2px 4px; border: 1px solid #ccc; border-radius: 2px; font-size: 14px; flex-shrink: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
+                html += '<button class="jigui-goto-btn" style="padding: 2px 8px; margin-left: 4px; background: #808080; color: white; border: none; border-radius: 2px; cursor: pointer; font-size: 14px; flex-shrink: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">Goto</button>';
+                html += '</div>';
             }
 
-            htmlParts.push('</div>'); // 关闭最外层的flex容器
+            html += '</div>'; // 关闭最外层的flex容器
 
             // 更新 resultDiv 的样式，确保内容完整显示
             resultDiv.style.display = 'flex';
@@ -1634,7 +1509,6 @@
             resultDiv.style.writingMode = 'horizontal-tb';
             resultDiv.style.direction = 'ltr';
 
-            const html = htmlParts.join('');
             resultDiv.innerHTML = html;
             this.currentSearchContent = searchContent;
             this.currentSearchType = searchType;
@@ -1933,11 +1807,10 @@
                 });
             });
 
-            // 监听弹窗父节点变化：只观察必要的 childList，避免对整个 body 做 subtree 级别观察
-            const observeRoot = detailPanel.parentNode || document.body;
-            observer.observe(observeRoot, {
+            // 开始观察body的变化
+            observer.observe(document.body, {
                 childList: true,
-                subtree: false
+                subtree: true
             });
 
             // 保存observer以便后续清理
@@ -2868,17 +2741,13 @@
 
                         // 如果没有找到 a 标签，查找所有元素
                         if (browseAttachmentElements.length === 0) {
-                            const root = iframeDoc.body || iframeDoc.documentElement;
-                            if (root) {
-                                // 避免全量 querySelectorAll('*')：缩小到更可能包含文本的常见元素集合
-                                const candidates = root.querySelectorAll('a,button,span,div,td,th,p,li,b,strong,em');
-                                candidates.forEach(el => {
-                                    const text = (el.textContent || el.innerText || '').trim();
-                                    if (text === '浏览附件' || text.includes('浏览附件')) {
-                                        browseAttachmentElements.push(el);
-                                    }
-                                });
-                            }
+                            const allElements = iframeDoc.querySelectorAll('*');
+                            allElements.forEach(el => {
+                                const text = (el.textContent || el.innerText || '').trim();
+                                if (text === '浏览附件' || text.includes('浏览附件')) {
+                                    browseAttachmentElements.push(el);
+                                }
+                            });
                         }
 
                         if (browseAttachmentElements.length > 0) {
@@ -2988,32 +2857,27 @@
                                                         let attachmentContent = null;
 
                                                         // 首先尝试查找包含"文件名"的内容（更宽松的匹配）
-                                                        // 避免 querySelectorAll('*') 创建巨大 NodeList：改用 TreeWalker 流式遍历
+                                                        const allElements = attachmentDoc.querySelectorAll('*');
                                                         let bestMatch = null;
                                                         let bestScore = 0;
-                                                        const root = attachmentDoc.body || attachmentDoc.documentElement;
-                                                        const walker = root ? attachmentDoc.createTreeWalker(root, 1, null) : null;
-                                                        if (walker) {
-                                                            let el = walker.nextNode();
-                                                            while (el) {
-                                                                const text = (el.textContent || '').trim();
-                                                                const lowerText = text.toLowerCase();
 
-                                                                // 计算匹配分数
-                                                                let score = 0;
-                                                                if (lowerText.includes('文件名')) score += 10;
-                                                                if (lowerText.includes('发布人')) score += 5;
-                                                                if (lowerText.includes('下载')) score += 5;
-                                                                if (lowerText.includes('附件')) score += 3;
+                                                        for (const el of allElements) {
+                                                            const text = (el.textContent || '').trim();
+                                                            const lowerText = text.toLowerCase();
 
-                                                                // 如果包含关键信息且是合适的容器
-                                                                if (score > 0 && (el.children.length > 0 || text.length > 30)) {
-                                                                    if (score > bestScore) {
-                                                                        bestScore = score;
-                                                                        bestMatch = el;
-                                                                    }
+                                                            // 计算匹配分数
+                                                            let score = 0;
+                                                            if (lowerText.includes('文件名')) score += 10;
+                                                            if (lowerText.includes('发布人')) score += 5;
+                                                            if (lowerText.includes('下载')) score += 5;
+                                                            if (lowerText.includes('附件')) score += 3;
+
+                                                            // 如果包含关键信息且是合适的容器
+                                                            if (score > 0 && (el.children.length > 0 || text.length > 30)) {
+                                                                if (score > bestScore) {
+                                                                    bestScore = score;
+                                                                    bestMatch = el;
                                                                 }
-                                                                el = walker.nextNode();
                                                             }
                                                         }
 
@@ -3024,10 +2888,8 @@
                                                             // 如果找到的是 body 或 html，尝试查找更具体的容器
                                                             if (attachmentContent.tagName === 'BODY' || attachmentContent.tagName === 'HTML') {
                                                                 // 查找包含附件信息的子元素
-                                                                // 同样避免 querySelectorAll('*')：使用 TreeWalker 流式遍历
-                                                                const childWalker = attachmentDoc.createTreeWalker(attachmentContent, 1, null);
-                                                                let child = childWalker.nextNode();
-                                                                while (child) {
+                                                                const children = attachmentContent.querySelectorAll('*');
+                                                                for (const child of children) {
                                                                     const childText = (child.textContent || '').trim().toLowerCase();
                                                                     if (childText.includes('文件名') &&
                                                                         (childText.includes('发布人') || childText.includes('下载'))) {
@@ -3038,7 +2900,6 @@
                                                                             break;
                                                                         }
                                                                     }
-                                                                    child = childWalker.nextNode();
                                                                 }
                                                             }
                                                         }
@@ -3328,7 +3189,19 @@
         clearSearch() {
             if (this._els.searchContent) this._els.searchContent.value = '';
             // 清空所有单选按钮
-            const allRadios = this._els && this._els.allRadios ? this._els.allRadios : [];
+            const allRadios = [
+                this.panel.querySelector('#zhiling-gonghao'),
+                this.panel.querySelector('#zhiling-user'),
+                this.panel.querySelector('#jigui-gonghao'),
+                this.panel.querySelector('#jigui-number'),
+                this.panel.querySelector('#jigui-picname'),
+                this.panel.querySelector('#jigui-writename'),
+                this.panel.querySelector('#tongzhi-number'),
+                this.panel.querySelector('#tongzhi-product-gonghao'),
+                this.panel.querySelector('#tongzhi-service-gonghao'),
+                this.panel.querySelector('#tongzhi-picname'),
+                this.panel.querySelector('#tongzhi-writename')
+            ];
             allRadios.forEach(radio => {
                 if (radio) radio.checked = false;
             });
@@ -3443,73 +3316,39 @@
             });
         }
 
-        // 制造令搜索所有分页（按工号：第1页与第2~6页同时进并发池，再视总页数拉取剩余页）
+        // 制造令搜索所有分页
         searchZhilingAllPages(content, searchType) {
-            const self = this;
-            const CONCURRENCY = CONFIG.pageFetch.concurrency;
-            const INITIAL_PAGES = CONFIG.pageFetch.initialPages;
-            return new Promise((resolve, reject) => {
-                if (searchType !== 'gonghao') {
-                    self.searchZhilingPage(content, searchType, 1)
-                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1, pageSize: first.pageSize }))
-                        .catch(reject);
-                    return;
-                }
-                const initialTasks = [];
-                for (let pageNum = 1; pageNum <= INITIAL_PAGES; pageNum++) {
-                    initialTasks.push(() =>
-                        self.searchZhilingPage(content, searchType, pageNum, pageNum === 1 ? undefined : { quiet: true })
-                            .then(res => ({ pageNum, res }))
-                            .catch(err => ({ pageNum, res: null, err }))
-                    );
-                }
-                console.log('[制造令] 第 1~' + INITIAL_PAGES + ' 页同时进并发池，共 ' + INITIAL_PAGES + ' 个请求');
-                self._runWithConcurrencyLimit(initialTasks, CONCURRENCY)
-                    .then(initialResults => {
-                        const firstRes = initialResults[0] && initialResults[0].res;
-                        if (!firstRes) return Promise.reject(initialResults[0] && initialResults[0].err || new Error('第1页获取失败'));
-                        const totalPages = firstRes.totalPages;
-                        const totalCount = firstRes.totalCount;
-                        const pageSizeFromFirst = firstRes.pageSize;
-                        const allHeaders = firstRes.headers;
-                        let allRows = [];
-                        const useCount = Math.min(totalPages, INITIAL_PAGES);
-                        for (let i = 0; i < useCount; i++) {
-                            const r = initialResults[i] && initialResults[i].res;
-                            if (r && r.rows) allRows = allRows.concat(r.rows);
-                        }
-                        console.log('制造令第 1~' + useCount + ' 页获取完成，总页数: ' + totalPages + '，当前共 ' + allRows.length + ' 条');
+            return this.searchZhilingPage(content, searchType, 1)
+                .then(first => {
+                    const totalPages = first.totalPages || 1;
+                    const allRows = (first.rows || []).slice();
+                    const allHeaders = first.headers;
+                    const totalCount = first.totalCount || allRows.length;
+                    const pageSize = first.pageSize;
 
-                        if (totalPages <= INITIAL_PAGES) {
-                            console.log('制造令所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
-                        }
-                        const restCount = totalPages - INITIAL_PAGES;
-                        console.log('[制造令] 使用并发池拉取第 ' + (INITIAL_PAGES + 1) + ' 至 ' + totalPages + ' 页，共 ' + restCount + ' 页');
-                        const restTasks = [];
-                        for (let pageNum = INITIAL_PAGES + 1; pageNum <= totalPages; pageNum++) {
-                            restTasks.push(() =>
-                                self.searchZhilingPage(content, searchType, pageNum, { quiet: true })
-                                    .then(pageResult => {
-                                        console.log('制造令第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
-                                        return { pageNum, rows: pageResult.rows };
-                                    })
-                                    .catch(error => {
-                                        console.error('制造令第 ' + pageNum + ' 页获取失败:', error);
-                                        return { pageNum, rows: [] };
-                                    })
-                            );
-                        }
-                        return self._runWithConcurrencyLimit(restTasks, CONCURRENCY).then(restResults => {
-                            restResults.sort((a, b) => a.pageNum - b.pageNum);
-                            restResults.forEach(r => { allRows = allRows.concat(r.rows); });
-                            console.log('制造令所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
-                        });
-                    })
-                    .then(resolve)
-                    .catch(reject);
-            });
+                    if (searchType !== 'gonghao' || totalPages <= 1) {
+                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: 1, pageSize: pageSize };
+                    }
+
+                    let chain = Promise.resolve();
+                    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+                        chain = chain.then(() =>
+                            this.searchZhilingPage(content, searchType, pageNum, { quiet: true })
+                                .then(pageResult => {
+                                    console.log('制造令第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
+                                    allRows.push(...pageResult.rows);
+                                })
+                                .catch(error => {
+                                    console.error('制造令第 ' + pageNum + ' 页获取失败:', error);
+                                })
+                        );
+                    }
+
+                    return chain.then(() => {
+                        console.log('制造令所有页面获取完成，共 ' + allRows.length + ' 条数据');
+                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSize };
+                    });
+                });
         }
 
         // 制造令搜索（兼容旧接口，非工号搜索时使用）
@@ -3564,75 +3403,40 @@
             });
         }
 
-        // 通知单搜索所有分页（按产品工号或服务订单工号：第1页与第2~6页同时进并发池，再视总页数拉取剩余页）
+        // 通知单搜索所有分页
         searchTongzhiAllPages(content, searchType) {
-            const self = this;
             const isGonghao = searchType === 'product_gonghao' || searchType === 'service_gonghao';
-            const CONCURRENCY = CONFIG.pageFetch.concurrency;
-            const INITIAL_PAGES = CONFIG.pageFetch.initialPages; // 第1批：第1~6页同时发起，不等第1页返回再发第2~6页
-            return new Promise((resolve, reject) => {
-                if (!isGonghao) {
-                    self.searchTongzhiPage(content, searchType, 1)
-                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1, pageSize: first.pageSize }))
-                        .catch(reject);
-                    return;
-                }
-                // 按工号：第1~6页同时进并发池，一起发出
-                const initialTasks = [];
-                for (let pageNum = 1; pageNum <= INITIAL_PAGES; pageNum++) {
-                    initialTasks.push(() =>
-                        self.searchTongzhiPage(content, searchType, pageNum, pageNum === 1 ? undefined : { quiet: true })
-                            .then(res => ({ pageNum, res }))
-                            .catch(err => ({ pageNum, res: null, err }))
-                    );
-                }
-                console.log('[通知单] 第 1~' + INITIAL_PAGES + ' 页同时进并发池，共 ' + INITIAL_PAGES + ' 个请求');
-                self._runWithConcurrencyLimit(initialTasks, CONCURRENCY)
-                    .then(initialResults => {
-                        const firstRes = initialResults[0] && initialResults[0].res;
-                        if (!firstRes) return Promise.reject(initialResults[0] && initialResults[0].err || new Error('第1页获取失败'));
-                        const totalPages = firstRes.totalPages;
-                        const totalCount = firstRes.totalCount;
-                        const pageSizeFromFirst = firstRes.pageSize;
-                        const allHeaders = firstRes.headers;
-                        let allRows = [];
-                        const useCount = Math.min(totalPages, INITIAL_PAGES);
-                        for (let i = 0; i < useCount; i++) {
-                            const r = initialResults[i] && initialResults[i].res;
-                            if (r && r.rows) allRows = allRows.concat(r.rows);
-                        }
-                        console.log('通知单第 1~' + useCount + ' 页获取完成，总页数: ' + totalPages + '，当前共 ' + allRows.length + ' 条');
+            return this.searchTongzhiPage(content, searchType, 1)
+                .then(first => {
+                    const totalPages = first.totalPages || 1;
+                    const allRows = (first.rows || []).slice();
+                    const allHeaders = first.headers;
+                    const totalCount = first.totalCount || allRows.length;
+                    const pageSize = first.pageSize;
 
-                        if (totalPages <= INITIAL_PAGES) {
-                            console.log('通知单所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
-                        }
-                        const restCount = totalPages - INITIAL_PAGES;
-                        console.log('[通知单] 使用并发池拉取第 ' + (INITIAL_PAGES + 1) + ' 至 ' + totalPages + ' 页，共 ' + restCount + ' 页');
-                        const restTasks = [];
-                        for (let pageNum = INITIAL_PAGES + 1; pageNum <= totalPages; pageNum++) {
-                            restTasks.push(() =>
-                                self.searchTongzhiPage(content, searchType, pageNum, { quiet: true })
-                                    .then(pageResult => {
-                                        console.log('通知单第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
-                                        return { pageNum, rows: pageResult.rows };
-                                    })
-                                    .catch(error => {
-                                        console.error('通知单第 ' + pageNum + ' 页获取失败:', error);
-                                        return { pageNum, rows: [] };
-                                    })
-                            );
-                        }
-                        return self._runWithConcurrencyLimit(restTasks, CONCURRENCY).then(restResults => {
-                            restResults.sort((a, b) => a.pageNum - b.pageNum);
-                            restResults.forEach(r => { allRows = allRows.concat(r.rows); });
-                            console.log('通知单所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
-                        });
-                    })
-                    .then(resolve)
-                    .catch(reject);
-            });
+                    if (!isGonghao || totalPages <= 1) {
+                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: 1, pageSize: pageSize };
+                    }
+
+                    let chain = Promise.resolve();
+                    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+                        chain = chain.then(() =>
+                            this.searchTongzhiPage(content, searchType, pageNum, { quiet: true })
+                                .then(pageResult => {
+                                    console.log('通知单第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
+                                    allRows.push(...pageResult.rows);
+                                })
+                                .catch(error => {
+                                    console.error('通知单第 ' + pageNum + ' 页获取失败:', error);
+                                })
+                        );
+                    }
+
+                    return chain.then(() => {
+                        console.log('通知单所有页面获取完成，共 ' + allRows.length + ' 条数据');
+                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSize };
+                    });
+                });
         }
 
         // 通知单搜索（兼容旧接口，非工号搜索时使用）
