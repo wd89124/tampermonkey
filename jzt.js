@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.7
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -973,7 +973,8 @@
                             rows: first.rows,
                             totalPages: first.totalPages || 1,
                             totalCount: first.totalCount || first.rows.length,
-                            currentPage: 1
+                            currentPage: 1,
+                            pageSize: first.pageSize
                         }));
                     break;
                 case 'tongzhi': // 通知单（与其它模式一致，分页展示）
@@ -1030,7 +1031,7 @@
             return new Promise((resolve, reject) => {
                 if (searchType !== 'gonghao') {
                     self.searchJiguiPage(content, searchType, 1)
-                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1 }))
+                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1, pageSize: first.pageSize }))
                         .catch(reject);
                     return;
                 }
@@ -1049,6 +1050,7 @@
                         if (!firstRes) return Promise.reject(initialResults[0] && initialResults[0].err || new Error('第1页获取失败'));
                         const totalPages = firstRes.totalPages;
                         const totalCount = firstRes.totalCount;
+                        const pageSizeFromFirst = firstRes.pageSize;
                         const allHeaders = firstRes.headers;
                         let allRows = [];
                         const useCount = Math.min(totalPages, INITIAL_PAGES);
@@ -1060,7 +1062,7 @@
 
                         if (totalPages <= INITIAL_PAGES) {
                             console.log('所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages };
+                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
                         }
                         const restCount = totalPages - INITIAL_PAGES;
                         console.log('[机规] 使用并发池拉取第 ' + (INITIAL_PAGES + 1) + ' 至 ' + totalPages + ' 页，共 ' + restCount + ' 页');
@@ -1082,7 +1084,7 @@
                             restResults.sort((a, b) => a.pageNum - b.pageNum);
                             restResults.forEach(r => { allRows = allRows.concat(r.rows); });
                             console.log('所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages };
+                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
                         });
                     })
                     .then(resolve)
@@ -1286,10 +1288,10 @@
                     }
                 }
                 if (pageSize <= 0) {
-                    const perPageRe = /(?:每页\s*(\d+)\s*条|(\d+)\s*篇(?:\s*文章)?\s*\/\s*页|(\d+)\s*条\s*\/\s*页)/g;
+                    const perPageRe = /(?:每页\s*(\d+)\s*条|(\d+)\s*篇(?:\s*文章)?\s*\/\s*页|(\d+)\s*条\s*记录\s*\/\s*页|(\d+)\s*条\s*\/\s*页)/g;
                     let m;
                     while ((m = perPageRe.exec(str)) !== null) {
-                        const n = parseInt(m[1] || m[2] || m[3], 10);
+                        const n = parseInt(m[1] || m[2] || m[3] || m[4], 10);
                         if (n > 0) { pageSize = n; if (!quiet) console.log('匹配到每页条数: ' + pageSize + ' (' + from + ')'); break; }
                     }
                 }
@@ -1305,7 +1307,7 @@
 
             if (!tableMatch) {
                 if (!quiet) console.log('没有找到表格');
-                return { headers: headers, rows: rows, totalPages: totalPages, totalCount: totalCount };
+                return { headers: headers, rows: rows, totalPages: totalPages, totalCount: totalCount, pageSize: pageSize > 0 ? pageSize : 0 };
             }
 
             let tableHtml = tableMatch[1];
@@ -1382,8 +1384,10 @@
                 }
             }
             // 仅当完全解析不到总条数时，用本页行数；不再强制 totalPages=2，避免掩盖真实页数
+            // 展示用每页条数：与后台分页一致（解析值或本页满页行数），不要用 总条数/总页数（会得到最后一页平均）
+            const resolvedPageSize = pageSize > 0 ? pageSize : (rows.length > 0 ? rows.length : 0);
 
-            return { headers: headers, rows: rows, totalPages: totalPages, totalCount: totalCount };
+            return { headers: headers, rows: rows, totalPages: totalPages, totalCount: totalCount, pageSize: resolvedPageSize };
         }
 
         stripAllTags(html) {
@@ -1422,8 +1426,10 @@
 
             const isDefault = searchType === 'default';
 
-            // 计算每页条数
-            const pageSize = results.length > 0 && totalPages > 0 ? Math.ceil(totalCount / totalPages) : results.length;
+            // 每页条数：使用解析/接口返回的 pageSize（与源站分页一致）；勿用 总条数/总页数（会得到各页平均）
+            let pageSize = typeof parseResult.pageSize === 'number' && parseResult.pageSize > 0
+                ? parseResult.pageSize
+                : (totalPages <= 1 && results.length > 0 ? results.length : 0);
 
             // 所有模块：只要有搜索结果就显示分页模块（含仅一页的情况）
             const showPagination = results.length > 0 && totalPages >= 1;
@@ -1656,7 +1662,8 @@
                                 headers: p1.headers,
                                 totalPages: finalTotalPages,
                                 totalCount: finalTotalCount,
-                                currentPage: 1
+                                currentPage: 1,
+                                pageSize: p1.pageSize
                             }, searchType, searchContent);
                         });
                     }
@@ -1668,7 +1675,8 @@
                         headers: pageResult.headers,
                         totalPages: finalTotalPages,
                         totalCount: finalTotalCount,
-                        currentPage: pageNum
+                        currentPage: pageNum,
+                        pageSize: pageResult.pageSize
                     }, searchType, searchContent);
                 })
                 .catch(error => {
@@ -3374,7 +3382,7 @@
             return new Promise((resolve, reject) => {
                 if (searchType !== 'gonghao') {
                     self.searchZhilingPage(content, searchType, 1)
-                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1 }))
+                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1, pageSize: first.pageSize }))
                         .catch(reject);
                     return;
                 }
@@ -3393,6 +3401,7 @@
                         if (!firstRes) return Promise.reject(initialResults[0] && initialResults[0].err || new Error('第1页获取失败'));
                         const totalPages = firstRes.totalPages;
                         const totalCount = firstRes.totalCount;
+                        const pageSizeFromFirst = firstRes.pageSize;
                         const allHeaders = firstRes.headers;
                         let allRows = [];
                         const useCount = Math.min(totalPages, INITIAL_PAGES);
@@ -3404,7 +3413,7 @@
 
                         if (totalPages <= INITIAL_PAGES) {
                             console.log('制造令所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages };
+                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
                         }
                         const restCount = totalPages - INITIAL_PAGES;
                         console.log('[制造令] 使用并发池拉取第 ' + (INITIAL_PAGES + 1) + ' 至 ' + totalPages + ' 页，共 ' + restCount + ' 页');
@@ -3426,7 +3435,7 @@
                             restResults.sort((a, b) => a.pageNum - b.pageNum);
                             restResults.forEach(r => { allRows = allRows.concat(r.rows); });
                             console.log('制造令所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages };
+                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
                         });
                     })
                     .then(resolve)
@@ -3495,7 +3504,7 @@
             return new Promise((resolve, reject) => {
                 if (!isGonghao) {
                     self.searchTongzhiPage(content, searchType, 1)
-                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1 }))
+                        .then(first => resolve({ headers: first.headers, rows: first.rows, totalPages: first.totalPages || 1, totalCount: first.totalCount || first.rows.length, currentPage: 1, pageSize: first.pageSize }))
                         .catch(reject);
                     return;
                 }
@@ -3515,6 +3524,7 @@
                         if (!firstRes) return Promise.reject(initialResults[0] && initialResults[0].err || new Error('第1页获取失败'));
                         const totalPages = firstRes.totalPages;
                         const totalCount = firstRes.totalCount;
+                        const pageSizeFromFirst = firstRes.pageSize;
                         const allHeaders = firstRes.headers;
                         let allRows = [];
                         const useCount = Math.min(totalPages, INITIAL_PAGES);
@@ -3526,7 +3536,7 @@
 
                         if (totalPages <= INITIAL_PAGES) {
                             console.log('通知单所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages };
+                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
                         }
                         const restCount = totalPages - INITIAL_PAGES;
                         console.log('[通知单] 使用并发池拉取第 ' + (INITIAL_PAGES + 1) + ' 至 ' + totalPages + ' 页，共 ' + restCount + ' 页');
@@ -3548,7 +3558,7 @@
                             restResults.sort((a, b) => a.pageNum - b.pageNum);
                             restResults.forEach(r => { allRows = allRows.concat(r.rows); });
                             console.log('通知单所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages };
+                            return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSizeFromFirst };
                         });
                     })
                     .then(resolve)
