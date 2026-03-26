@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      1.10
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -70,7 +70,6 @@
             this.currentSearchContent = ''; // 当前搜索内容
             this.currentSearchType = 'default'; // 当前搜索类型
             this.isMinimized = false; // 默认展开状态（目标链接区域直接可见，无需点击放大镜）
-            this.isDetailMinimized = false; // 弹出窗口最小化状态（保留用于向后兼容）
             this.bodyOverflowState = null; // 保存body的overflow状态
             this.htmlOverflowState = null; // 保存html的overflow状态
             this.isDragging = false; // 是否正在拖拽搜索图标按钮
@@ -999,41 +998,6 @@
                 });
         }
 
-        // 搜索所有页面的结果
-        searchJiguiAllPages(content, searchType) {
-            return this.searchJiguiPage(content, searchType, 1)
-                .then(first => {
-                    const totalPages = first.totalPages || 1;
-                    const allRows = (first.rows || []).slice();
-                    const allHeaders = first.headers;
-                    const totalCount = first.totalCount || allRows.length;
-                    const pageSize = first.pageSize;
-
-                    if (searchType !== 'gonghao' || totalPages <= 1) {
-                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: 1, pageSize: pageSize };
-                    }
-
-                    let chain = Promise.resolve();
-                    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
-                        chain = chain.then(() =>
-                            this.searchJiguiPage(content, searchType, pageNum, { quiet: true })
-                                .then(pageResult => {
-                                    console.log('第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
-                                    allRows.push(...pageResult.rows);
-                                })
-                                .catch(error => {
-                                    console.error('第 ' + pageNum + ' 页获取失败:', error);
-                                })
-                        );
-                    }
-
-                    return chain.then(() => {
-                        console.log('所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSize };
-                    });
-                });
-        }
-
         // GBK 编码：机规系统使用 GBK/GB2312，搜索参数需与直接搜索一致
         // 优先使用 gbk-lite（@require）对全部文字正确编码；不可用时回退
         encodeGBK(str) {
@@ -1712,7 +1676,7 @@
                         <button class="detail-close-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; font-size: 16px; font-weight: 400; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; transition: background-color 0.2s; line-height: 1;">×</button>
                     </div>
                 </div>
-                <iframe class="detail-content" style="flex: 1; border: none; width: 100%; height: 100%;"></iframe>
+                <iframe class="detail-content" style="flex: 1 1 0; min-height: 0; border: none; width: 100%; height: 100%;"></iframe>
                 <div class="detail-resize-handle" style="position: absolute; bottom: 0; right: 0; width: 20px; height: 20px; cursor: nwse-resize; z-index: ${zIndex + 1}; background: transparent; border-right: 2px solid #0066cc; border-bottom: 2px solid #0066cc;"></div>
             `;
 
@@ -1958,19 +1922,6 @@
             }
         }
 
-        // 向后兼容的关闭方法
-        closeDetailPanel() {
-            if (this.detailPanel) {
-                this.closeDetailPanelById(this.detailPanel.id);
-            }
-        }
-
-        makeDetailDraggable() {
-            if (this.detailPanel) {
-                this.makeDetailDraggableById(this.detailPanel.id);
-            }
-        }
-
         makeDetailDraggableById(panelId) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
@@ -2113,12 +2064,6 @@
             };
         }
 
-        makeDetailResizable() {
-            if (this.detailPanel) {
-                this.makeDetailResizableById(this.detailPanel.id);
-            }
-        }
-
         makeDetailResizableById(panelId) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
@@ -2203,6 +2148,45 @@
             }
         }
 
+        /** 将 normalState 中的宽高规范为带单位的字符串，避免纯数字被写成非法 CSS */
+        normalizeCssLengthPx(value, fallback) {
+            if (value == null || value === '') return fallback;
+            if (typeof value === 'number' && !isNaN(value)) return value + 'px';
+            const s = String(value).trim();
+            if (/^\d+(\.\d+)?$/.test(s)) return s + 'px';
+            return s;
+        }
+
+        /**
+         * 统一恢复详情 iframe 的 flex 与可见性并强制布局（同步，不含 rAF）。
+         * 注意：勿在内部使用 rAF，否则「退出最大化后立即最小化」时，下一帧会把已隐藏的 iframe 又显示出来。
+         */
+        ensureDetailIframeVisible(panel) {
+            const contentIframe = panel && panel.querySelector('.detail-content');
+            if (!contentIframe) return;
+
+            contentIframe.style.removeProperty('display');
+            contentIframe.style.removeProperty('visibility');
+            contentIframe.style.removeProperty('height');
+            contentIframe.style.removeProperty('min-height');
+            contentIframe.style.removeProperty('flex');
+            contentIframe.style.removeProperty('flex-basis');
+            contentIframe.style.removeProperty('opacity');
+            contentIframe.style.removeProperty('overflow');
+            contentIframe.style.setProperty('flex', '1 1 0', 'important');
+            contentIframe.style.setProperty('min-height', '0', 'important');
+            contentIframe.style.setProperty('width', '100%', 'important');
+            contentIframe.style.setProperty('height', '100%', 'important');
+            contentIframe.style.setProperty('visibility', 'visible', 'important');
+            contentIframe.style.setProperty('opacity', '1', 'important');
+            void contentIframe.offsetWidth;
+            void contentIframe.offsetHeight;
+            try {
+                const cw = contentIframe.contentWindow;
+                if (cw) cw.dispatchEvent(new Event('resize'));
+            } catch (e) { /* 跨域 */ }
+        }
+
         toggleDetailMinimizeById(panelId) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
@@ -2214,39 +2198,20 @@
 
             if (state.isMinimized) {
                 state.isMinimized = false;
-                if (contentIframe) {
-                    contentIframe.style.removeProperty('display');
-                    contentIframe.style.removeProperty('visibility');
-                    contentIframe.style.removeProperty('height');
-                    contentIframe.style.removeProperty('min-height');
-                    contentIframe.style.removeProperty('flex');
-                    contentIframe.style.removeProperty('opacity');
-                    contentIframe.style.removeProperty('overflow');
-                    contentIframe.style.setProperty('flex', '1', 'important');
-                    contentIframe.style.setProperty('width', '100%', 'important');
-                    contentIframe.style.setProperty('height', '100%', 'important');
-                    // 不重新加载 iframe，保留用户已填写的内容（创建通知单、创建制造令、创建机规等表单）
-                }
 
-                // 显示调整大小手柄
-                const resizeHandle = panel.querySelector('.detail-resize-handle');
-                if (resizeHandle) {
-                    resizeHandle.style.removeProperty('display');
-                }
+                // 获取要恢复的宽度和高度（须带单位，否则部分环境下 height 无效导致 iframe 区域高度为 0）
+                const restoreWidth = this.normalizeCssLengthPx(state.normalState && state.normalState.width, '800px');
+                const restoreHeight = this.normalizeCssLengthPx(state.normalState && state.normalState.height, '600px');
 
-                // 获取要恢复的宽度和高度
-                const restoreWidth = (state.normalState && state.normalState.width) ? state.normalState.width : '800px';
-                const restoreHeight = (state.normalState && state.normalState.height) ? state.normalState.height : '600px';
-
-                // 恢复窗口大小
+                // 恢复窗口大小（先恢复父级 flex 容器尺寸，再恢复 iframe，避免子级 height:100% 在父高为 0 时失效）
                 const computedStyle = window.getComputedStyle(panel);
                 const borderLeft = parseFloat(computedStyle.borderLeftWidth) || 0;
                 const borderRight = parseFloat(computedStyle.borderRightWidth) || 0;
-                const widthValue = parseFloat(restoreWidth);
+                const widthValue = parseFloat(restoreWidth) || 800;
                 const totalWidth = widthValue + borderLeft + borderRight;
 
-                // 以右上角为锚点：获取当前右上角位置（如果保存了则使用保存的位置）
-                let fullWindowRight, fullWindowTop;
+                let fullWindowRight;
+                let fullWindowTop;
                 if (state.normalState && state.normalState.fullWindowRight !== undefined) {
                     fullWindowRight = state.normalState.fullWindowRight;
                     fullWindowTop = state.normalState.fullWindowTop !== undefined ? state.normalState.fullWindowTop : panel.getBoundingClientRect().top;
@@ -2256,9 +2221,7 @@
                     fullWindowTop = currentRect.top;
                 }
 
-                // 计算新的 left（保持右上角位置不变）
                 const newLeft = fullWindowRight - totalWidth;
-                // top 保持不变（右上角位置不变）
                 const newTop = fullWindowTop;
 
                 panel.style.setProperty('left', newLeft + 'px', 'important');
@@ -2266,12 +2229,23 @@
                 panel.style.setProperty('width', restoreWidth, 'important');
                 panel.style.removeProperty('min-width');
                 panel.style.setProperty('height', restoreHeight, 'important');
-                // 清除最小化时设置的样式限制
                 panel.style.removeProperty('max-height');
                 panel.style.removeProperty('min-height');
                 panel.style.removeProperty('overflow');
-                // 恢复窗口背景色为白色
                 panel.style.setProperty('background', 'white', 'important');
+
+                const resizeHandle = panel.querySelector('.detail-resize-handle');
+                if (resizeHandle) {
+                    resizeHandle.style.removeProperty('display');
+                }
+
+                this.ensureDetailIframeVisible(panel);
+                // 再延后两帧刷新一次，修复部分浏览器在复杂状态切换后 iframe 仍白屏的问题
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        this.ensureDetailIframeVisible(panel);
+                    });
+                });
 
                 // 恢复后保存状态
                 setTimeout(() => {
@@ -2382,12 +2356,6 @@
             this.updateDetailButtons();
         }
 
-        toggleDetailMinimize() {
-            if (this.detailPanel) {
-                this.toggleDetailMinimizeById(this.detailPanel.id);
-            }
-        }
-
         toggleDetailMaximizeById(panelId) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
@@ -2484,20 +2452,7 @@
                         panel.style.setProperty('width', '300px', 'important');
                     }
                 } else {
-                    const contentIframe = panel.querySelector('.detail-content');
-                    if (contentIframe) {
-                        contentIframe.style.removeProperty('display');
-                        contentIframe.style.removeProperty('visibility');
-                        contentIframe.style.removeProperty('height');
-                        contentIframe.style.removeProperty('min-height');
-                        contentIframe.style.removeProperty('opacity');
-                        contentIframe.style.removeProperty('flex');
-                        contentIframe.style.removeProperty('overflow');
-                        contentIframe.style.setProperty('flex', '1', 'important');
-                        contentIframe.style.setProperty('width', '100%', 'important');
-                        contentIframe.style.setProperty('height', '100%', 'important');
-                        // 不重新加载 iframe，保留用户已填写的内容（创建通知单、创建制造令、创建机规等表单）
-                    }
+                    this.ensureDetailIframeVisible(panel);
                     const resizeHandle = panel.querySelector('.detail-resize-handle');
                     if (resizeHandle) {
                         resizeHandle.style.display = 'block';
@@ -2531,15 +2486,7 @@
                     }
 
                     if (!state.isMinimized) {
-                        const contentIframe = panel.querySelector('.detail-content');
-                        if (contentIframe) {
-                            contentIframe.style.setProperty('flex', '1', 'important');
-                            contentIframe.style.setProperty('display', 'block', 'important');
-                            contentIframe.style.setProperty('visibility', 'visible', 'important');
-                            contentIframe.style.removeProperty('height');
-                            contentIframe.style.removeProperty('opacity');
-                            void contentIframe.offsetHeight;
-                        }
+                        this.ensureDetailIframeVisible(panel);
                     }
                     setTimeout(() => {
                         this.saveDetailPanelStateById(panelId);
@@ -2608,13 +2555,6 @@
             // 更新按钮显示状态
             this.updateDetailButtons();
         }
-
-        toggleDetailMaximize() {
-            if (this.detailPanel) {
-                this.toggleDetailMaximizeById(this.detailPanel.id);
-            }
-        }
-
 
         loadDetailContentById(panelId, href) {
             const panel = this.detailPanels.get(panelId);
@@ -3055,20 +2995,6 @@
             contentIframe.src = fullUrl;
         }
 
-        loadDetailContent(href) {
-            if (this.detailPanel) {
-                this.loadDetailContentById(this.detailPanel.id, href);
-            }
-        }
-
-        closeDetailPanel() {
-            if (this.detailPanel) {
-                // 保存窗口状态到 localStorage
-                this.saveDetailPanelState();
-                this.detailPanel.style.display = 'none';
-            }
-        }
-
         saveDetailPanelStateById(panelId) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
@@ -3108,12 +3034,6 @@
                 state.normalState.left = panel.style.left;
                 state.normalState.width = computedStyle.width;
                 state.normalState.height = computedStyle.height;
-            }
-        }
-
-        saveDetailPanelState() {
-            if (this.detailPanel) {
-                this.saveDetailPanelStateById(this.detailPanel.id);
             }
         }
 
@@ -3186,29 +3106,6 @@
             return null;
         }
 
-        clearSearch() {
-            if (this._els.searchContent) this._els.searchContent.value = '';
-            // 清空所有单选按钮
-            const allRadios = [
-                this.panel.querySelector('#zhiling-gonghao'),
-                this.panel.querySelector('#zhiling-user'),
-                this.panel.querySelector('#jigui-gonghao'),
-                this.panel.querySelector('#jigui-number'),
-                this.panel.querySelector('#jigui-picname'),
-                this.panel.querySelector('#jigui-writename'),
-                this.panel.querySelector('#tongzhi-number'),
-                this.panel.querySelector('#tongzhi-product-gonghao'),
-                this.panel.querySelector('#tongzhi-service-gonghao'),
-                this.panel.querySelector('#tongzhi-picname'),
-                this.panel.querySelector('#tongzhi-writename')
-            ];
-            allRadios.forEach(radio => {
-                if (radio) radio.checked = false;
-            });
-            this.updateSearchOptions(this.currentTab);
-            if (this._els.searchResult) this._els.searchResult.innerHTML = '<div style="color: #666; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">搜索结果</div>';
-        }
-
         // 根据标签页加载对应的首页内容
         loadTabDefaultContent(tab) {
             const resultDiv = this._els.searchResult;
@@ -3242,14 +3139,6 @@
                     console.error('加载首页失败:', err);
                     resultDiv.innerHTML = '<div style="color: red; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">加载首页失败: ' + (err && err.message ? err.message : '') + '</div>';
                 });
-        }
-
-        // 进入首页时默认拉取并展示 http://10.16.88.34/jigui/ 的全部内容（保留用于初始化）
-        loadDefaultContent() {
-            const path = (typeof location !== 'undefined' && location.pathname) || '';
-            if (/^\/jigui\/?$/.test(path)) {
-                this.loadTabDefaultContent('jigui');
-            }
         }
 
         // 制造令搜索（单页）
@@ -3316,41 +3205,6 @@
             });
         }
 
-        // 制造令搜索所有分页
-        searchZhilingAllPages(content, searchType) {
-            return this.searchZhilingPage(content, searchType, 1)
-                .then(first => {
-                    const totalPages = first.totalPages || 1;
-                    const allRows = (first.rows || []).slice();
-                    const allHeaders = first.headers;
-                    const totalCount = first.totalCount || allRows.length;
-                    const pageSize = first.pageSize;
-
-                    if (searchType !== 'gonghao' || totalPages <= 1) {
-                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: 1, pageSize: pageSize };
-                    }
-
-                    let chain = Promise.resolve();
-                    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
-                        chain = chain.then(() =>
-                            this.searchZhilingPage(content, searchType, pageNum, { quiet: true })
-                                .then(pageResult => {
-                                    console.log('制造令第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
-                                    allRows.push(...pageResult.rows);
-                                })
-                                .catch(error => {
-                                    console.error('制造令第 ' + pageNum + ' 页获取失败:', error);
-                                })
-                        );
-                    }
-
-                    return chain.then(() => {
-                        console.log('制造令所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSize };
-                    });
-                });
-        }
-
         // 制造令搜索（兼容旧接口，非工号搜索时使用）
         searchZhiling(content, searchType) {
             return this.searchZhilingPage(content, searchType, 1);
@@ -3403,69 +3257,9 @@
             });
         }
 
-        // 通知单搜索所有分页
-        searchTongzhiAllPages(content, searchType) {
-            const isGonghao = searchType === 'product_gonghao' || searchType === 'service_gonghao';
-            return this.searchTongzhiPage(content, searchType, 1)
-                .then(first => {
-                    const totalPages = first.totalPages || 1;
-                    const allRows = (first.rows || []).slice();
-                    const allHeaders = first.headers;
-                    const totalCount = first.totalCount || allRows.length;
-                    const pageSize = first.pageSize;
-
-                    if (!isGonghao || totalPages <= 1) {
-                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: 1, pageSize: pageSize };
-                    }
-
-                    let chain = Promise.resolve();
-                    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
-                        chain = chain.then(() =>
-                            this.searchTongzhiPage(content, searchType, pageNum, { quiet: true })
-                                .then(pageResult => {
-                                    console.log('通知单第 ' + pageNum + ' 页获取完成，' + pageResult.rows.length + ' 条数据');
-                                    allRows.push(...pageResult.rows);
-                                })
-                                .catch(error => {
-                                    console.error('通知单第 ' + pageNum + ' 页获取失败:', error);
-                                })
-                        );
-                    }
-
-                    return chain.then(() => {
-                        console.log('通知单所有页面获取完成，共 ' + allRows.length + ' 条数据');
-                        return { headers: allHeaders, rows: allRows, totalPages: totalPages, totalCount: totalCount, currentPage: totalPages, pageSize: pageSize };
-                    });
-                });
-        }
-
         // 通知单搜索（兼容旧接口，非工号搜索时使用）
         searchTongzhi(content, searchType) {
             return this.searchTongzhiPage(content, searchType, 1);
-        }
-
-        // 全局搜索
-        searchGlobal(content, searchType) {
-            return new Promise((resolve, reject) => {
-                if (searchType !== 'gonghao') {
-                    reject(new Error('全局搜索目前只支持工号'));
-                    return;
-                }
-
-                const encGBK = (s) => this.encodeGBK(s);
-
-                // 全局搜索可能需要同时搜索多个模块，然后合并结果
-                // 这里先实现简单的单模块搜索，后续可以扩展为多模块聚合
-                const url = 'http://10.16.88.34/search.asp?type=global&gonghao=' + encGBK(content);
-
-                console.log('全局搜索 URL:', url);
-                this.fetchUrl(url)
-                    .then(html => {
-                        const parseResult = this.parseResponse(html);
-                        resolve(parseResult);
-                    })
-                    .catch(reject);
-            });
         }
 
         closePanel() {
