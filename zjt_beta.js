@@ -311,8 +311,13 @@
                     const tab = btn.getAttribute('data-tab');
                     // 再次点击当前激活标签：切回该标签的主页列表界面
                     if (tab === this.currentTab) {
-                        this.updateSearchOptions(tab, 'default');
-                        this.loadTabDefaultContent(tab);
+                        const selectedSearchType = this.getSelectedSearchTypeForTab(tab) || 'default';
+                        // 保留当前单选框选择，但首页数据强制刷新（绕过缓存）
+                        this.updateSearchOptions(tab, selectedSearchType);
+                        this.loadTabDefaultContent(tab, {
+                            forceRefresh: true,
+                            preserveSearchType: selectedSearchType
+                        });
                         return;
                     }
                     this.switchTab(tab);
@@ -413,6 +418,12 @@
                 pageSize: parseResult.pageSize || 0,
                 currentPage: parseResult.currentPage || 1
             };
+        }
+
+        getSelectedSearchTypeForTab(tab) {
+            if (!this.panel || !tab) return null;
+            const selected = this.panel.querySelector('input[name="' + tab + '-search-type"]:checked');
+            return selected ? selected.value : null;
         }
 
         updateSearchOptions(tab, searchTypeOverride) {
@@ -1160,7 +1171,8 @@
         }
 
         // 通用：GET 指定 URL，gb2312 解码后返回 HTML 字符串
-        fetchUrl(url, referer) {
+        fetchUrl(url, referer, options) {
+            const noCache = !!(options && options.noCache);
             // 如果没有指定referer，根据URL自动判断
             if (!referer) {
                 if (url.includes('/zzl/')) {
@@ -1177,16 +1189,20 @@
             }
 
             return new Promise((resolve, reject) => {
+                const headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9',
+                    'Referer': referer,
+                    'Cache-Control': noCache ? 'no-cache, no-store, must-revalidate' : 'max-age=0',
+                    'Pragma': noCache ? 'no-cache' : 'max-age=0'
+                };
+                if (noCache) headers['Expires'] = '0';
+
                 GM_xmlhttpRequest({
                     method: 'GET',
                     url: url,
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'zh-CN,zh;q=0.9',
-                        'Referer': referer,
-                        'Cache-Control': 'max-age=0'
-                    },
+                    headers: headers,
                     responseType: 'arraybuffer',
                     onload: (response) => {
                         if (response.status === 200) {
@@ -3276,9 +3292,11 @@
         }
 
         // 根据标签页加载对应的首页内容
-        loadTabDefaultContent(tab) {
+        loadTabDefaultContent(tab, options) {
             const resultDiv = this._els.searchResult;
             if (!resultDiv) return;
+            const forceRefresh = !!(options && options.forceRefresh);
+            const preserveSearchType = options && options.preserveSearchType ? options.preserveSearchType : null;
             // 每次渲染首页都更新 token，用于让正在进行的异步请求失效
             const token = ++this.renderToken;
             const tabUrls = {
@@ -3294,25 +3312,36 @@
                 return;
             }
 
+            // 强制刷新：清理缓存和 inflight，直接请求最新首页内容
+            if (forceRefresh) {
+                this.tabDefaultContentCache.delete(tab);
+                this.tabDefaultContentPromises.delete(tab);
+            }
+
             // 命中缓存：直接渲染
-            if (this.tabDefaultContentCache.has(tab)) {
+            if (!forceRefresh && this.tabDefaultContentCache.has(tab)) {
                 const parseResult = this.tabDefaultContentCache.get(tab);
                 parseResult.currentPage = 1;
                 // 保存搜索状态，供分页使用
                 this.currentSearchContent = '';
                 this.currentSearchType = 'default';
                 this.displayResults(parseResult, 'default', '');
+                if (preserveSearchType) this.updateSearchOptions(tab, preserveSearchType);
                 console.log(tab + ' 首页(缓存)渲染完成，' + (parseResult.rows ? parseResult.rows.length : 0) + ' 条');
                 return;
             }
 
             // 如果预取仍在进行中：等待同一个 inflight promise
-            const inflight = this.tabDefaultContentPromises.get(tab);
-            resultDiv.innerHTML = '<div style="color: #0066cc; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">正在加载首页信息...</div>';
+            const inflight = forceRefresh ? null : this.tabDefaultContentPromises.get(tab);
+            resultDiv.innerHTML = '<div style="color: #0066cc; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">' + (forceRefresh ? '正在刷新首页信息...' : '正在加载首页信息...') + '</div>';
 
             const loadPromise = inflight
                 ? inflight
-                : this.fetchUrl(indexUrl).then(html => {
+                : this.fetchUrl(
+                    forceRefresh ? this.appendNoCacheParam(indexUrl) : indexUrl,
+                    null,
+                    forceRefresh ? { noCache: true } : null
+                ).then(html => {
                     const parseResult = this.parseResponse(html);
                     parseResult.currentPage = 1;
                     return parseResult;
@@ -3333,6 +3362,13 @@
                     this.currentSearchContent = '';
                     this.currentSearchType = 'default';
                     this.displayResults(parseResult, 'default', '');
+                    if (preserveSearchType) {
+                        this.updateSearchOptions(tab, preserveSearchType);
+                        const state = this.tabLastViewState.get(tab) || {};
+                        this.tabLastViewState.set(tab, Object.assign({}, state, {
+                            searchType: preserveSearchType
+                        }));
+                    }
                     console.log(tab + ' 首页加载完成，' + parseResult.rows.length + ' 条');
                 })
                 .catch(err => {
@@ -3341,6 +3377,11 @@
                     if (this.renderToken !== token) return;
                     resultDiv.innerHTML = '<div style="color: red; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">加载首页失败: ' + (err && err.message ? err.message : '') + '</div>';
                 });
+        }
+
+        appendNoCacheParam(url) {
+            const hasQuery = url.indexOf('?') >= 0;
+            return url + (hasQuery ? '&' : '?') + '_ts=' + Date.now();
         }
 
         // 制造令搜索（单页）
