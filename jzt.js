@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      1.11
+// @version      1.12
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -73,6 +73,20 @@
             this.bodyOverflowState = null; // 保存body的overflow状态
             this.htmlOverflowState = null; // 保存html的overflow状态
             this.isDragging = false; // 是否正在拖拽搜索图标按钮
+
+            // 预读缓存：不同标签的“首页列表信息”解析结果
+            // 用 Map 保存：tab -> parseResult；用另一个 Map 保存：tab -> inflight Promise
+            this.tabDefaultContentCache = new Map();
+            this.tabDefaultContentPromises = new Map();
+
+            // 记录每个标签页上次展示的“状态”（页码/搜索类型/内容）
+            this.tabLastViewState = new Map();
+
+            // 当前展示的页码（由 displayResults() 更新）
+            this.currentDisplayedPage = 1;
+
+            // 渲染令牌：用于防止切换标签时异步请求返回覆盖新标签内容
+            this.renderToken = 0;
         }
 
         create() {
@@ -286,17 +300,35 @@
             this.updateSearchOptions('zhiling');
             this.loadTabDefaultContent('zhiling');
 
+            // 后台预读：机规/通知单首页列表，保证切换标签时可直接渲染
+            this.prefetchTabDefaultContent('jigui');
+            this.prefetchTabDefaultContent('tongzhi');
+
             // 绑定标签切换事件
             const tabButtons = this.panel.querySelectorAll('.tab-btn');
             tabButtons.forEach(btn => {
                 btn.addEventListener('click', () => {
                     const tab = btn.getAttribute('data-tab');
+                    // 再次点击当前激活标签：切回该标签的主页列表界面
+                    if (tab === this.currentTab) {
+                        const selectedSearchType = this.getSelectedSearchTypeForTab(tab) || 'default';
+                        // 保留当前单选框选择，但首页数据强制刷新（绕过缓存）
+                        this.updateSearchOptions(tab, selectedSearchType);
+                        this.loadTabDefaultContent(tab, {
+                            forceRefresh: true,
+                            preserveSearchType: selectedSearchType
+                        });
+                        return;
+                    }
                     this.switchTab(tab);
                 });
             });
         }
 
         switchTab(tab) {
+            const prevTab = this.currentTab;
+            if (prevTab) this.saveTabViewState(prevTab);
+
             this.currentTab = tab;
 
             // 更新标签按钮样式（使用统一色调，点击时颜色加深、字体放大）
@@ -321,11 +353,80 @@
                 }
             });
 
-            this.updateSearchOptions(tab);
-            this.loadTabDefaultContent(tab);
+            const state = this.tabLastViewState.get(tab);
+            const searchTypeOverride = state && state.searchType ? state.searchType : 'default';
+            this.updateSearchOptions(tab, searchTypeOverride);
+            this.restoreTabView(tab);
         }
 
-        updateSearchOptions(tab) {
+        // 保存离开当前标签时的展示状态
+        saveTabViewState(tab) {
+            if (!tab) return;
+            const previous = this.tabLastViewState.get(tab) || {};
+            this.tabLastViewState.set(tab, {
+                searchContent: this.currentSearchContent || '',
+                searchType: this.currentSearchType || 'default',
+                pageNum: this.currentDisplayedPage || 1,
+                parseResult: previous.parseResult ? this.cloneParseResult(previous.parseResult) : null
+            });
+        }
+
+        // 切回标签时恢复上次展示的最后页面
+        restoreTabView(tab) {
+            const state = this.tabLastViewState.get(tab);
+            if (!state) {
+                this.loadTabDefaultContent(tab);
+                return;
+            }
+
+            const pageNum = state.pageNum || 1;
+            const searchType = state.searchType || 'default';
+            const searchContent = state.searchContent || '';
+
+            // 优先使用缓存快照直接渲染，避免切换标签时重新请求造成卡顿
+            if (state.parseResult) {
+                const cached = this.cloneParseResult(state.parseResult);
+                cached.currentPage = pageNum;
+                this.displayResults(cached, searchType, searchContent);
+                return;
+            }
+
+            // 默认列表第一页走缓存渲染，其他情况走 loadPage 统一逻辑
+            if (searchType === 'default' && pageNum === 1) {
+                this.loadTabDefaultContent(tab);
+            } else {
+                this.loadPage(searchContent, searchType, pageNum);
+            }
+        }
+
+        cloneParseResult(parseResult) {
+            if (!parseResult) return null;
+            const headers = Array.isArray(parseResult.headers) ? parseResult.headers.slice() : [];
+            const rows = Array.isArray(parseResult.rows)
+                ? parseResult.rows.map(row => Array.isArray(row)
+                    ? row.map(cell => {
+                        if (cell && typeof cell === 'object') return Object.assign({}, cell);
+                        return cell;
+                    })
+                    : [])
+                : [];
+            return {
+                headers: headers,
+                rows: rows,
+                totalPages: parseResult.totalPages || 1,
+                totalCount: parseResult.totalCount || rows.length,
+                pageSize: parseResult.pageSize || 0,
+                currentPage: parseResult.currentPage || 1
+            };
+        }
+
+        getSelectedSearchTypeForTab(tab) {
+            if (!this.panel || !tab) return null;
+            const selected = this.panel.querySelector('input[name="' + tab + '-search-type"]:checked');
+            return selected ? selected.value : null;
+        }
+
+        updateSearchOptions(tab, searchTypeOverride) {
             // 获取所有单选按钮元素
             const zhilingGonghao = this.panel.querySelector('#zhiling-gonghao');
             const zhilingUser = this.panel.querySelector('#zhiling-user');
@@ -338,6 +439,8 @@
             const tongzhiServiceGonghao = this.panel.querySelector('#tongzhi-service-gonghao');
             const tongzhiPicname = this.panel.querySelector('#tongzhi-picname');
             const tongzhiWritename = this.panel.querySelector('#tongzhi-writename');
+
+            const override = searchTypeOverride || 'default';
 
             // 重置所有单选按钮
             const allRadios = [
@@ -357,18 +460,25 @@
                 // 制造令：显示"按工号"和"按用户"（单选按钮）
                 if (zhilingGonghao) {
                     zhilingGonghao.parentElement.style.display = 'flex';
-                    zhilingGonghao.checked = true; // 默认选中
+                    zhilingGonghao.checked = (override === 'default' || override === 'gonghao');
                 }
-                if (zhilingUser) zhilingUser.parentElement.style.display = 'flex';
+                if (zhilingUser) {
+                    zhilingUser.parentElement.style.display = 'flex';
+                    zhilingUser.checked = (override === 'user');
+                }
             } else if (tab === 'jigui') {
                 // 机规：显示"按工号"、"按编号"、"按部件名称"、"按创建人"（单选按钮）
                 if (jiguiGonghao) {
                     jiguiGonghao.parentElement.style.display = 'flex';
-                    jiguiGonghao.checked = true; // 默认选中
+                    jiguiGonghao.checked = (override === 'default' || override === 'gonghao');
                 }
                 if (jiguiNumber) jiguiNumber.parentElement.style.display = 'flex';
                 if (jiguiPicname) jiguiPicname.parentElement.style.display = 'flex';
                 if (jiguiWritename) jiguiWritename.parentElement.style.display = 'flex';
+
+                if (jiguiNumber) jiguiNumber.checked = (override === 'number');
+                if (jiguiPicname) jiguiPicname.checked = (override === 'picname');
+                if (jiguiWritename) jiguiWritename.checked = (override === 'writename');
                 // 显示"创建机规"按钮
                 const createJiguiWrapper = this._els && this._els.createJiguiBtnWrapper;
                 if (createJiguiWrapper) createJiguiWrapper.style.display = 'block';
@@ -376,12 +486,24 @@
                 // 通知单：显示所有单选按钮
                 if (tongzhiNumber) {
                     tongzhiNumber.parentElement.style.display = 'flex';
-                    tongzhiNumber.checked = true; // 默认选中
+                    tongzhiNumber.checked = (override === 'default' || override === 'number');
                 }
-                if (tongzhiProductGonghao) tongzhiProductGonghao.parentElement.style.display = 'flex';
-                if (tongzhiServiceGonghao) tongzhiServiceGonghao.parentElement.style.display = 'flex';
-                if (tongzhiPicname) tongzhiPicname.parentElement.style.display = 'flex';
-                if (tongzhiWritename) tongzhiWritename.parentElement.style.display = 'flex';
+                if (tongzhiProductGonghao) {
+                    tongzhiProductGonghao.parentElement.style.display = 'flex';
+                    tongzhiProductGonghao.checked = (override === 'product_gonghao');
+                }
+                if (tongzhiServiceGonghao) {
+                    tongzhiServiceGonghao.parentElement.style.display = 'flex';
+                    tongzhiServiceGonghao.checked = (override === 'service_gonghao');
+                }
+                if (tongzhiPicname) {
+                    tongzhiPicname.parentElement.style.display = 'flex';
+                    tongzhiPicname.checked = (override === 'picname');
+                }
+                if (tongzhiWritename) {
+                    tongzhiWritename.parentElement.style.display = 'flex';
+                    tongzhiWritename.checked = (override === 'writename');
+                }
                 // 显示"创建通知单"按钮
                 const createTongzhiWrapper = this._els && this._els.createTongzhiBtnWrapper;
                 if (createTongzhiWrapper) createTongzhiWrapper.style.display = 'block';
@@ -1049,7 +1171,8 @@
         }
 
         // 通用：GET 指定 URL，gb2312 解码后返回 HTML 字符串
-        fetchUrl(url, referer) {
+        fetchUrl(url, referer, options) {
+            const noCache = !!(options && options.noCache);
             // 如果没有指定referer，根据URL自动判断
             if (!referer) {
                 if (url.includes('/zzl/')) {
@@ -1066,16 +1189,20 @@
             }
 
             return new Promise((resolve, reject) => {
+                const headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'zh-CN,zh;q=0.9',
+                    'Referer': referer,
+                    'Cache-Control': noCache ? 'no-cache, no-store, must-revalidate' : 'max-age=0',
+                    'Pragma': noCache ? 'no-cache' : 'max-age=0'
+                };
+                if (noCache) headers['Expires'] = '0';
+
                 GM_xmlhttpRequest({
                     method: 'GET',
                     url: url,
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'zh-CN,zh;q=0.9',
-                        'Referer': referer,
-                        'Cache-Control': 'max-age=0'
-                    },
+                    headers: headers,
                     responseType: 'arraybuffer',
                     onload: (response) => {
                         if (response.status === 200) {
@@ -1321,6 +1448,7 @@
             let totalPages = parseResult.totalPages || 1;
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
+            this.currentDisplayedPage = currentPage;
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -1476,6 +1604,23 @@
             resultDiv.innerHTML = html;
             this.currentSearchContent = searchContent;
             this.currentSearchType = searchType;
+
+            // 每次渲染后缓存当前标签的最后结果，供切换标签时直接秒开
+            if (this.currentTab) {
+                this.tabLastViewState.set(this.currentTab, {
+                    searchContent: searchContent || '',
+                    searchType: searchType || 'default',
+                    pageNum: currentPage,
+                    parseResult: this.cloneParseResult({
+                        headers: headers,
+                        rows: results,
+                        totalPages: totalPages,
+                        totalCount: totalCount,
+                        pageSize: pageSize,
+                        currentPage: currentPage
+                    })
+                });
+            }
         }
 
         // 跳转到指定页（非工号搜索时使用，只显示该页数据）
@@ -1487,6 +1632,8 @@
                 paginationDiv.style.pointerEvents = 'none';
                 paginationDiv.style.opacity = '0.6';
             }
+
+            const token = ++this.renderToken;
 
             const restore = () => {
                 if (paginationDiv) {
@@ -1563,6 +1710,7 @@
                             // 重新解析第1页以获取正确的 totalPages 和 totalCount
                             const finalTotalPages = p1.totalPages || preservedTotalPages || 1;
                             const finalTotalCount = p1.totalCount || preservedTotalCount || p1.rows.length;
+                            if (this.renderToken !== token) return;
                             this.displayResults({
                                 rows: p1.rows,
                                 headers: p1.headers,
@@ -1576,6 +1724,7 @@
                     // 取较大值：若后续页 HTML 含更大总页数/总条数（如 页次 2/4），则采用以纠正首页解析不足
                     const finalTotalPages = Math.max(preservedTotalPages || 0, pageResult.totalPages || 0) || 1;
                     const finalTotalCount = Math.max(preservedTotalCount || 0, pageResult.totalCount || 0) || pageResult.rows.length;
+                    if (this.renderToken !== token) return;
                     this.displayResults({
                         rows: pageResult.rows,
                         headers: pageResult.headers,
@@ -1587,6 +1736,7 @@
                 })
                 .catch(error => {
                     console.error('加载第 ' + pageNum + ' 页失败:', error);
+                    if (this.renderToken !== token) return;
                     restore();
                     alert('加载第 ' + pageNum + ' 页失败: ' + error.message);
                 });
@@ -3106,10 +3256,49 @@
             return null;
         }
 
+        // 预取指定标签的“首页列表信息”（只抓取+解析，不直接渲染）
+        prefetchTabDefaultContent(tab) {
+            const tabUrls = {
+                'jigui': 'http://10.16.88.34/jigui/',
+                'zhiling': 'http://10.16.88.34/zzl/',  // 制造令模块
+                'tongzhi': 'http://10.16.88.34/notice/'  // 通知单模块
+            };
+
+            const indexUrl = tabUrls[tab];
+            if (!indexUrl) return;
+
+            // 已缓存或正在预取则跳过
+            if (this.tabDefaultContentCache.has(tab)) return;
+            if (this.tabDefaultContentPromises.has(tab)) return;
+
+            const inflight = this.fetchUrl(indexUrl)
+                .then(html => {
+                    const parseResult = this.parseResponse(html);
+                    parseResult.currentPage = 1;
+                    return parseResult;
+                });
+
+            this.tabDefaultContentPromises.set(tab, inflight);
+
+            inflight
+                .then(parseResult => {
+                    this.tabDefaultContentCache.set(tab, parseResult);
+                    this.tabDefaultContentPromises.delete(tab);
+                })
+                .catch(err => {
+                    console.error('预读首页失败:', tab, err);
+                    this.tabDefaultContentPromises.delete(tab);
+                });
+        }
+
         // 根据标签页加载对应的首页内容
-        loadTabDefaultContent(tab) {
+        loadTabDefaultContent(tab, options) {
             const resultDiv = this._els.searchResult;
             if (!resultDiv) return;
+            const forceRefresh = !!(options && options.forceRefresh);
+            const preserveSearchType = options && options.preserveSearchType ? options.preserveSearchType : null;
+            // 每次渲染首页都更新 token，用于让正在进行的异步请求失效
+            const token = ++this.renderToken;
             const tabUrls = {
                 'jigui': 'http://10.16.88.34/jigui/',
                 'zhiling': 'http://10.16.88.34/zzl/',  // 制造令模块
@@ -3123,22 +3312,76 @@
                 return;
             }
 
-            resultDiv.innerHTML = '<div style="color: #0066cc; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">正在加载首页信息...</div>';
+            // 强制刷新：清理缓存和 inflight，直接请求最新首页内容
+            if (forceRefresh) {
+                this.tabDefaultContentCache.delete(tab);
+                this.tabDefaultContentPromises.delete(tab);
+            }
 
-            this.fetchUrl(indexUrl)
-                .then(html => {
+            // 命中缓存：直接渲染
+            if (!forceRefresh && this.tabDefaultContentCache.has(tab)) {
+                const parseResult = this.tabDefaultContentCache.get(tab);
+                parseResult.currentPage = 1;
+                // 保存搜索状态，供分页使用
+                this.currentSearchContent = '';
+                this.currentSearchType = 'default';
+                this.displayResults(parseResult, 'default', '');
+                if (preserveSearchType) this.updateSearchOptions(tab, preserveSearchType);
+                console.log(tab + ' 首页(缓存)渲染完成，' + (parseResult.rows ? parseResult.rows.length : 0) + ' 条');
+                return;
+            }
+
+            // 如果预取仍在进行中：等待同一个 inflight promise
+            const inflight = forceRefresh ? null : this.tabDefaultContentPromises.get(tab);
+            resultDiv.innerHTML = '<div style="color: #0066cc; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">' + (forceRefresh ? '正在刷新首页信息...' : '正在加载首页信息...') + '</div>';
+
+            const loadPromise = inflight
+                ? inflight
+                : this.fetchUrl(
+                    forceRefresh ? this.appendNoCacheParam(indexUrl) : indexUrl,
+                    null,
+                    forceRefresh ? { noCache: true } : null
+                ).then(html => {
                     const parseResult = this.parseResponse(html);
                     parseResult.currentPage = 1;
+                    return parseResult;
+                });
+
+            // 若是自己发起的加载，把它也纳入 inflight，避免重复请求
+            if (!inflight) {
+                this.tabDefaultContentPromises.set(tab, loadPromise);
+            }
+
+            loadPromise
+                .then(parseResult => {
+                    this.tabDefaultContentCache.set(tab, parseResult);
+                    this.tabDefaultContentPromises.delete(tab);
+                    // 若在这期间又切换了标签，避免旧请求覆盖新标签内容
+                    if (this.renderToken !== token) return;
                     // 保存搜索状态，供分页使用
                     this.currentSearchContent = '';
                     this.currentSearchType = 'default';
                     this.displayResults(parseResult, 'default', '');
+                    if (preserveSearchType) {
+                        this.updateSearchOptions(tab, preserveSearchType);
+                        const state = this.tabLastViewState.get(tab) || {};
+                        this.tabLastViewState.set(tab, Object.assign({}, state, {
+                            searchType: preserveSearchType
+                        }));
+                    }
                     console.log(tab + ' 首页加载完成，' + parseResult.rows.length + ' 条');
                 })
                 .catch(err => {
                     console.error('加载首页失败:', err);
+                    this.tabDefaultContentPromises.delete(tab);
+                    if (this.renderToken !== token) return;
                     resultDiv.innerHTML = '<div style="color: red; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">加载首页失败: ' + (err && err.message ? err.message : '') + '</div>';
                 });
+        }
+
+        appendNoCacheParam(url) {
+            const hasQuery = url.indexOf('?') >= 0;
+            return url + (hasQuery ? '&' : '?') + '_ts=' + Date.now();
         }
 
         // 制造令搜索（单页）
