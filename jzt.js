@@ -539,7 +539,7 @@
                             </label>
                         </div>
                         <div style="padding: 0 20px;">
-                            <input type="text" id="search-content" placeholder="输入关键词" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px;">
+                            <input type="text" id="search-content" placeholder="" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px;">
                         </div>
                         <div style="padding: 0 20px;">
                             <button id="search-btn" style="width: 100%; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 18px;">搜　索</button>
