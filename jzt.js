@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -2536,12 +2536,12 @@
                     originalLeftValue = rect.left;
                 }
 
-                // 获取内容区域，拖拽时用 visibility 隐藏（不脱离布局，滚动位置不会丢失）
+                // 获取内容区域，拖拽时禁用指针事件以减轻卡顿，但保持内容可见
                 const content = panel.querySelector('.detail-content');
-                let contentVisibility = '';
+                let contentPointerEvents = '';
                 if (content) {
-                    contentVisibility = content.style.visibility || '';
-                    content.style.setProperty('visibility', 'hidden', 'important');
+                    contentPointerEvents = content.style.pointerEvents || '';
+                    content.style.setProperty('pointer-events', 'none', 'important');
                 }
 
                 // 添加拖拽时的样式优化，使用 transform 提升性能
@@ -2601,8 +2601,8 @@
                         panel.style.removeProperty('transition');
                         panel.style.removeProperty('backface-visibility');
 
-                        if (content && contentVisibility !== undefined) {
-                            content.style.setProperty('visibility', contentVisibility || 'visible', 'important');
+                        if (content && contentPointerEvents !== undefined) {
+                            content.style.setProperty('pointer-events', contentPointerEvents || 'auto', 'important');
                         }
 
                         // 更新窗口状态（异步执行，不阻塞）
