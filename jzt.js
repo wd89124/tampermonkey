@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -17,6 +17,11 @@
 
 (function() {
     'use strict';
+
+    // 固定浏览器标签页标题
+    try {
+        document.title = '制造令/机规/通知单';
+    } catch (e) {}
 
     // 修复 WdatePicker.js 的 unload 弃用警告：在页面上下文中最早注入补丁（在 WdatePicker 之前执行）
     (function injectUnloadPatch() {
@@ -90,15 +95,28 @@
         }
         #panel-header,
         [id^="jigui-detail-panel-"] .detail-header {
-            background: linear-gradient(135deg, var(--jigui-primary-dark), var(--jigui-primary)) !important;
+            background: rgb(30, 80, 220) !important;
             color: #fff !important;
-            padding: 12px 14px !important;
+            padding: 0 14px !important;
+            height: 32px !important;
+            min-height: 32px !important;
             border-radius: 0 !important;
         }
         #panel-header > span,
         [id^="jigui-detail-panel-"] .detail-title {
-            font-size: 16px !important;
+            font-size: 15px !important;
             font-weight: 700 !important;
+        }
+        [id^="jigui-detail-panel-"] .detail-resize-handle {
+            display: block !important;
+            width: 16px !important;
+            height: 16px !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            cursor: nwse-resize !important;
+            background: transparent !important;
+            border-right: 2px solid rgba(255, 255, 255, 0.85) !important;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.85) !important;
         }
         #panel-header button,
         [id^="jigui-detail-panel-"] .detail-header button,
@@ -205,7 +223,7 @@
             flex: 0 0 18px !important;
         }
         #search-options-container span {
-            font-size: 17px !important;
+            font-size: 16px !important;
             font-weight: 500 !important;
             color: #000 !important;
         }
@@ -557,8 +575,8 @@
                         <div id="maximized-minimize-only" style="position: absolute; top: 12px; right: 12px; transform: none; z-index: 100100; display: none;">
                             <button id="maximized-minimize-btn" style="width: 28px; height: 28px; background: #dc3545; border: 2px solid #c82333; color: white; cursor: pointer; font-size: 20px; font-weight: bold; padding: 0; border-radius: 4px; box-shadow: none; display: flex; align-items: center; justify-content: center;">−</button>
                         </div>
-                        <div id="search-result" style="flex: 1; color: #666; text-align: center; display: flex; align-items: center; justify-content: center; font-size: 18px; overflow: auto; min-height: 0; writing-mode: horizontal-tb; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">
-                            搜索结果
+                        <div id="search-result" style="flex: 1; color: #666; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; font-size: 18px; overflow: auto; min-height: 0; writing-mode: horizontal-tb; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">
+                            <div style="color: #0066cc; text-align: center; font-size: 20px; margin-top: 10px; font-family: &quot;Microsoft YaHei&quot;, &quot;微软雅黑&quot;, sans-serif !important;">正在加载页面信息...</div>
                         </div>
                     </div>
                 </div>
@@ -2211,12 +2229,25 @@
             this.detailPanelStates.set(panelId, panelState);
 
             detailPanel.innerHTML = `
-                <div class="detail-header" style="background: linear-gradient(135deg, #1d4ed8, #2563eb); color: white; height: 40px; padding: 0 14px; border-radius: 0; display: flex; justify-content: space-between; align-items: center; cursor: move; min-height: 40px; box-sizing: border-box;">
-                    <span class="detail-title" style="font-weight: bold; line-height: 1;">📄 ${titleText || '详情页面'}</span>
-                    <div style="display: flex; align-items: center; gap: 0; height: 100%;">
-                        <button class="detail-minimize-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; font-size: 14px; font-weight: 400; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; margin-right: 8px; transition: background-color 0.2s; line-height: 1;">─</button>
-                        <button class="detail-maximize-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; margin-right: 8px; transition: background-color 0.2s; line-height: 1;">⛶</button>
-                        <button class="detail-close-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; font-size: 16px; font-weight: 400; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; transition: background-color 0.2s; line-height: 1;">×</button>
+                <div class="detail-header" style="background: rgb(30, 80, 220); color: white; height: 40px; padding: 0; border-radius: 0; display: flex; justify-content: space-between; align-items: center; cursor: move; min-height: 40px; box-sizing: border-box;">
+                    <span class="detail-title" style="font-weight: bold; line-height: 1; display: flex; align-items: center; padding-left: 0; margin-left: -8px;">📄 ${titleText || '详情页面'}</span>
+                    <div style="display: flex; align-items: center; gap: 0; height: 100%; margin-right: -6px;">
+                        <button class="detail-minimize-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; margin-right: 4px; transition: background-color 0.2s; line-height: 1;">
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
+                                <line x1="2" y1="6" x2="10" y2="6" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                        <button class="detail-maximize-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; margin-right: 4px; transition: background-color 0.2s; line-height: 1;">
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
+                                <rect x="2.2" y="2.2" width="7.6" height="7.6" fill="none" stroke="white" stroke-width="1.4" />
+                            </svg>
+                        </button>
+                        <button class="detail-close-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; transition: background-color 0.2s; line-height: 1;">
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
+                                <line x1="2.2" y1="2.2" x2="9.8" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                                <line x1="9.8" y1="2.2" x2="2.2" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                            </svg>
+                        </button>
                     </div>
                 </div>
                 <iframe class="detail-content" style="flex: 1 1 0; min-height: 0; border: none; width: 100%; height: 100%;"></iframe>
@@ -2617,52 +2648,76 @@
             let startX = 0, startY = 0, startWidth = 0, startHeight = 0, startLeft = 0, startTop = 0;
             const state = this.detailPanelStates.get(panelId);
 
-            resizeHandle.onmousedown = (e) => {
-                // 最大化或最小化状态下不能调整大小
-                if (panel.classList.contains('maximized') || (state && state.isMinimized)) return;
-
-                e.preventDefault();
-                e.stopPropagation();
-
-                // 点击时置顶
-                this.bringToFront(panelId);
-
-                startX = e.clientX;
-                startY = e.clientY;
+            const startResize = (clientX, clientY) => {
+                startX = clientX;
+                startY = clientY;
                 startWidth = parseInt(window.getComputedStyle(panel).width, 10);
                 startHeight = parseInt(window.getComputedStyle(panel).height, 10);
                 startLeft = panel.offsetLeft;
                 startTop = panel.offsetTop;
-
-                document.onmousemove = (e) => {
-                    e.preventDefault();
-
-                    const width = startWidth + (e.clientX - startX);
-                    const height = startHeight + (e.clientY - startY);
-
-                    // 设置最小尺寸限制
-                    const minWidth = 300;
-                    const minHeight = 200;
-
-                    if (width >= minWidth && height >= minHeight) {
-                        panel.style.width = width + 'px';
-                        panel.style.height = height + 'px';
-
-                        // 更新保存的状态
-                        if (state && state.normalState) {
-                            state.normalState.width = width + 'px';
-                            state.normalState.height = height + 'px';
-                        }
-                    }
-                };
-
-                document.onmouseup = () => {
-                    document.onmousemove = null;
-                    document.onmouseup = null;
-                    // 调整大小结束后保存状态
-                    this.saveDetailPanelStateById(panelId);
-                };
             };
+
+            let isResizing = false;
+            const minWidth = 300;
+            const minHeight = 200;
+            const onMove = (e) => {
+                if (!isResizing) return;
+                e.preventDefault();
+                const clientX = e.clientX ?? (e.touches && e.touches[0] && e.touches[0].clientX);
+                const clientY = e.clientY ?? (e.touches && e.touches[0] && e.touches[0].clientY);
+                if (clientX == null || clientY == null) return;
+
+                const width = startWidth + (clientX - startX);
+                const height = startHeight + (clientY - startY);
+
+                if (width >= minWidth && height >= minHeight) {
+                    panel.style.width = width + 'px';
+                    panel.style.height = height + 'px';
+                    if (state && state.normalState) {
+                        state.normalState.width = width + 'px';
+                        state.normalState.height = height + 'px';
+                    }
+                }
+            };
+
+            const onUp = (e) => {
+                if (!isResizing) return;
+                isResizing = false;
+                window.removeEventListener('mousemove', onMove, true);
+                window.removeEventListener('mouseup', onUp, true);
+                window.removeEventListener('pointermove', onMove, true);
+                window.removeEventListener('pointerup', onUp, true);
+                window.removeEventListener('blur', onUp, true);
+                document.body.style.userSelect = '';
+                if (e && e.pointerId != null && resizeHandle.releasePointerCapture) {
+                    try { resizeHandle.releasePointerCapture(e.pointerId); } catch (err) {}
+                }
+                this.saveDetailPanelStateById(panelId);
+            };
+
+            const onDown = (e) => {
+                if (panel.classList.contains('maximized') || (state && state.isMinimized)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                this.bringToFront(panelId);
+                startResize(e.clientX, e.clientY);
+                isResizing = true;
+                document.body.style.userSelect = 'none';
+
+                if (e.pointerId != null && resizeHandle.setPointerCapture) {
+                    try { resizeHandle.setPointerCapture(e.pointerId); } catch (err) {}
+                    window.addEventListener('pointermove', onMove, true);
+                    window.addEventListener('pointerup', onUp, true);
+                } else {
+                    window.addEventListener('mousemove', onMove, true);
+                    window.addEventListener('mouseup', onUp, true);
+                }
+                window.addEventListener('blur', onUp, true);
+            };
+
+            resizeHandle.onmousedown = null;
+            resizeHandle.addEventListener('pointerdown', onDown);
+            resizeHandle.addEventListener('mousedown', onDown);
         }
 
         updateMainButtons() {
@@ -2877,11 +2932,11 @@
                 panel.style.setProperty('min-height', totalHeight + 'px', 'important');
                 panel.style.setProperty('overflow', 'hidden', 'important');
                 // 最小化时将窗口背景设置为与标题栏一致，避免显示白色背景
-                panel.style.setProperty('background', '#0066cc', 'important');
+                panel.style.setProperty('background', 'rgb(30, 80, 220)', 'important');
 
                 // 确保标题栏背景可见
                 if (header) {
-                    header.style.setProperty('background', '#0066cc', 'important');
+                    header.style.setProperty('background', 'rgb(30, 80, 220)', 'important');
                 }
 
                 panel.style.setProperty('width', '300px', 'important');
@@ -2979,9 +3034,9 @@
                     panel.style.setProperty('min-height', totalHeight + 'px', 'important');
                     panel.style.setProperty('overflow', 'hidden', 'important');
                     // 最小化时将窗口背景设置为与标题栏一致，避免显示白色背景
-                    panel.style.setProperty('background', '#0066cc', 'important');
+                    panel.style.setProperty('background', 'rgb(30, 80, 220)', 'important');
                     if (header) {
-                        header.style.setProperty('background', '#0066cc', 'important');
+                        header.style.setProperty('background', 'rgb(30, 80, 220)', 'important');
                     }
 
                     // 以右上角为锚点：更新位置
