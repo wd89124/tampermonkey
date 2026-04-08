@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      2.3
+// @version      2.4
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -17,6 +17,8 @@
 
 (function() {
     'use strict';
+
+    /* global GBK */
 
     // 固定浏览器标签页标题
     try {
@@ -1608,7 +1610,7 @@
                     'Cache-Control': noCache ? 'no-cache, no-store, must-revalidate' : 'max-age=0',
                     'Pragma': noCache ? 'no-cache' : 'max-age=0'
                 };
-                if (noCache) headers['Expires'] = '0';
+                    if (noCache) headers.Expires = '0';
 
                 GM_xmlhttpRequest({
                     method: 'GET',
@@ -1865,7 +1867,12 @@
                 const msg = searchType === 'default'
                     ? '未解析到列表，请使用搜索'
                     : '未找到结果';
-                resultDiv.innerHTML = '<div style="color: #666; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">' + msg + '</div>';
+                resultDiv.style.display = 'flex';
+                resultDiv.style.flexDirection = 'column';
+                resultDiv.style.alignItems = 'center';
+                resultDiv.style.justifyContent = 'flex-start';
+                resultDiv.style.textAlign = 'center';
+                resultDiv.innerHTML = '<div style="color: #0066cc; text-align: center; font-size: 20px; margin-top: 10px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">' + msg + '</div>';
                 return;
             }
 
@@ -2073,7 +2080,7 @@
                     'zhiling': 'http://10.16.88.34/zzl/',
                     'tongzhi': 'http://10.16.88.34/notice/'
                 };
-                const baseUrl = tabUrls[this.currentTab] || tabUrls['jigui'];
+            const baseUrl = tabUrls[this.currentTab] || tabUrls.jigui;
                 const url = pageNum > 1 ? baseUrl + '?page=' + pageNum : baseUrl;
                 searchPromise = this.fetchUrl(url).then(html => {
                     const parseResult = this.parseResponse(html);
@@ -2102,7 +2109,7 @@
                                 'zhiling': 'http://10.16.88.34/zzl/',
                                 'tongzhi': 'http://10.16.88.34/notice/'
                             };
-                            const baseUrl = tabUrls[this.currentTab] || tabUrls['jigui'];
+                const baseUrl = tabUrls[this.currentTab] || tabUrls.jigui;
                             firstPagePromise = this.fetchUrl(baseUrl).then(html => {
                                 const parseResult = this.parseResponse(html);
                                 parseResult.currentPage = 1;
