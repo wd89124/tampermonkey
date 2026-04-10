@@ -360,9 +360,6 @@
             text-decoration: underline !important;
             font-weight: 400 !important;
         }
-        #search-result a.jigui-link-visited {
-            color: #6b4aa8 !important;
-        }
         .jigui-pagination {
             margin-top: 0 !important;
             padding: 0 !important;
