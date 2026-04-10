@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      2.6
+// @version      2.7
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -19,6 +19,61 @@
     'use strict';
 
     /* global GBK */
+
+    // 禁用 /notice/ 页面自动刷新（防止每 5 分钟刷新导致弹窗丢失）
+    (function disableNoticeAutoRefresh() {
+        try {
+            if (typeof location === 'undefined' || !/\/notice\/?/i.test(location.pathname)) return;
+            const code = function() {
+                try {
+                    // 移除 meta refresh
+                    const removeMetaRefresh = () => {
+                        const metas = document.querySelectorAll('meta[http-equiv="refresh"], meta[http-equiv="Refresh"]');
+                        metas.forEach(m => m.remove());
+                    };
+                    removeMetaRefresh();
+                    const mo = new MutationObserver(removeMetaRefresh);
+                    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
+
+                    // 兜底：拦截 reload/assign/replace
+                    try { window.location.reload = function() {}; } catch (e) {}
+                    try {
+                        const origAssign = window.location.assign.bind(window.location);
+                        const origReplace = window.location.replace.bind(window.location);
+                        window.location.assign = function(url) { if (url && String(url) !== String(window.location.href)) origAssign(url); };
+                        window.location.replace = function(url) { if (url && String(url) !== String(window.location.href)) origReplace(url); };
+                    } catch (e) {}
+
+                    // 过滤可疑的自动刷新定时器
+                    const isRefreshLike = (fn) => {
+                        if (typeof fn === 'string') {
+                            return /location\\.reload|location\\.href|document\\.location|window\\.location/.test(fn);
+                        }
+                        if (typeof fn !== 'function') return false;
+                        const s = Function.prototype.toString.call(fn);
+                        return /location\\.reload|location\\.href|document\\.location|window\\.location/.test(s);
+                    };
+                    const _setTimeout = window.setTimeout.bind(window);
+                    const _setInterval = window.setInterval.bind(window);
+                    window.setTimeout = function(fn, delay) {
+                        if (isRefreshLike(fn)) return 0;
+                        return _setTimeout(fn, delay);
+                    };
+                    window.setInterval = function(fn, delay) {
+                        if (isRefreshLike(fn)) return 0;
+                        return _setInterval(fn, delay);
+                    };
+                    // 兜底：周期性清理 meta refresh
+                    _setInterval(removeMetaRefresh, 1000 * 30);
+                } catch (e) {}
+            }.toString();
+            const script = document.createElement('script');
+            script.textContent = '(' + code + ')();';
+            const root = document.documentElement || document.head || document;
+            root.appendChild(script);
+            script.remove();
+        } catch (e) {}
+    })();
 
     // 固定浏览器标签页标题
     try {
@@ -1027,13 +1082,6 @@
                         e.stopPropagation();
                         const href = link.getAttribute('data-href');
                         const linkText = link.textContent || link.innerText || '';
-                        const trimmedText = String(linkText || '').trim();
-                        const isRedStatus = trimmedText === '未校核' || trimmedText === '未批准' || trimmedText === '未分发';
-                        if (!isRedStatus) {
-                            this.markVisitedLink(href);
-                            link.classList.add('jigui-link-visited');
-                            link.style.color = '#6b4aa8';
-                        }
                         if (href) this.openDetailPanel(href, linkText);
                         return;
                     }
@@ -1863,29 +1911,6 @@
             return String(cell);
         }
 
-        getVisitedLinkSet() {
-            try {
-                const raw = localStorage.getItem('jiguiVisitedLinks');
-                const arr = raw ? JSON.parse(raw) : [];
-                return new Set(Array.isArray(arr) ? arr : []);
-            } catch (e) {
-                return new Set();
-            }
-        }
-
-        markVisitedLink(href) {
-            if (!href) return;
-            try {
-                const raw = localStorage.getItem('jiguiVisitedLinks');
-                const arr = raw ? JSON.parse(raw) : [];
-                if (Array.isArray(arr) && !arr.includes(href)) {
-                    arr.push(href);
-                    if (arr.length > 5000) arr.shift();
-                    localStorage.setItem('jiguiVisitedLinks', JSON.stringify(arr));
-                }
-            } catch (e) {}
-        }
-
         displayResults(parseResult, searchType, searchContent) {
             const resultDiv = this._els.searchResult;
             if (!resultDiv) return;
@@ -1895,7 +1920,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
-            const visitedSet = this.getVisitedLinkSet();
+ 
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -1987,10 +2012,8 @@
                         const linkText = cell.text;
                         const isJiguiOrTongzhiLink = this.currentTab === 'jigui' || this.currentTab === 'tongzhi';
                         const isRedStatusLink = isJiguiOrTongzhiLink && (String(linkText).trim() === '未校核' || String(linkText).trim() === '未批准' || String(linkText).trim() === '未分发');
-                        const isVisited = !isRedStatusLink && href && visitedSet.has(href);
-                        const linkColor = isRedStatusLink ? 'red' : (isVisited ? '#6b4aa8' : '#0066cc');
-                        const linkStyle = 'color: ' + linkColor + ' !important; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;';
-                        const linkClass = 'jigui-detail-link' + (isVisited ? ' jigui-link-visited' : '');
+                        const linkStyle = isRedStatusLink ? 'color: red !important; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;' : 'color: #0066cc; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;';
+                        const linkClass = 'jigui-detail-link';
                         const safeHref = href ? href : '#';
                         cellParts.push(tdOpen + '<a href="' + safeHref + '" data-href="' + href + '" class="' + linkClass + '" style="' + linkStyle + '">' + linkText + '</a></td>');
                     } else {
