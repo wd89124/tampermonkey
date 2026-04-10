@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      2.5
+// @version      2.6
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -359,6 +359,9 @@
             color: #0066cc !important;
             text-decoration: underline !important;
             font-weight: 400 !important;
+        }
+        #search-result a.jigui-link-visited {
+            color: #6b4aa8 !important;
         }
         .jigui-pagination {
             margin-top: 0 !important;
@@ -1024,6 +1027,13 @@
                         e.stopPropagation();
                         const href = link.getAttribute('data-href');
                         const linkText = link.textContent || link.innerText || '';
+                        const trimmedText = String(linkText || '').trim();
+                        const isRedStatus = trimmedText === '未校核' || trimmedText === '未批准' || trimmedText === '未分发';
+                        if (!isRedStatus) {
+                            this.markVisitedLink(href);
+                            link.classList.add('jigui-link-visited');
+                            link.style.color = '#6b4aa8';
+                        }
                         if (href) this.openDetailPanel(href, linkText);
                         return;
                     }
@@ -1853,6 +1863,29 @@
             return String(cell);
         }
 
+        getVisitedLinkSet() {
+            try {
+                const raw = localStorage.getItem('jiguiVisitedLinks');
+                const arr = raw ? JSON.parse(raw) : [];
+                return new Set(Array.isArray(arr) ? arr : []);
+            } catch (e) {
+                return new Set();
+            }
+        }
+
+        markVisitedLink(href) {
+            if (!href) return;
+            try {
+                const raw = localStorage.getItem('jiguiVisitedLinks');
+                const arr = raw ? JSON.parse(raw) : [];
+                if (Array.isArray(arr) && !arr.includes(href)) {
+                    arr.push(href);
+                    if (arr.length > 5000) arr.shift();
+                    localStorage.setItem('jiguiVisitedLinks', JSON.stringify(arr));
+                }
+            } catch (e) {}
+        }
+
         displayResults(parseResult, searchType, searchContent) {
             const resultDiv = this._els.searchResult;
             if (!resultDiv) return;
@@ -1862,6 +1895,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
+            const visitedSet = this.getVisitedLinkSet();
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -1953,8 +1987,12 @@
                         const linkText = cell.text;
                         const isJiguiOrTongzhiLink = this.currentTab === 'jigui' || this.currentTab === 'tongzhi';
                         const isRedStatusLink = isJiguiOrTongzhiLink && (String(linkText).trim() === '未校核' || String(linkText).trim() === '未批准' || String(linkText).trim() === '未分发');
-                        const linkStyle = isRedStatusLink ? 'color: red !important; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;' : 'color: #0066cc; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;';
-                        cellParts.push(tdOpen + '<a href="javascript:void(0)" data-href="' + href + '" class="jigui-detail-link" style="' + linkStyle + '">' + linkText + '</a></td>');
+                        const isVisited = !isRedStatusLink && href && visitedSet.has(href);
+                        const linkColor = isRedStatusLink ? 'red' : (isVisited ? '#6b4aa8' : '#0066cc');
+                        const linkStyle = 'color: ' + linkColor + ' !important; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;';
+                        const linkClass = 'jigui-detail-link' + (isVisited ? ' jigui-link-visited' : '');
+                        const safeHref = href ? href : '#';
+                        cellParts.push(tdOpen + '<a href="' + safeHref + '" data-href="' + href + '" class="' + linkClass + '" style="' + linkStyle + '">' + linkText + '</a></td>');
                     } else {
                         const cellStr = String(cell);
                         const isJiguiOrTongzhi = this.currentTab === 'jigui' || this.currentTab === 'tongzhi';
@@ -3525,7 +3563,30 @@
                                                             addedCount++;
                                                         }
 
-                                                        console.log('已添加', addedCount, '个子元素到附件区域');
+                                                        // 统一附件列表展示：让图标和文字同一行
+                                                        const normalizeAttachmentLayout = (root) => {
+                                                            const imgs = root.querySelectorAll('img');
+                                                            imgs.forEach(img => {
+                                                                img.style.display = 'inline-block';
+                                                                img.style.verticalAlign = 'middle';
+                                                                img.style.marginRight = '6px';
+                                                                const next = img.nextSibling;
+                                                                if (next && next.nodeType === 1 && next.tagName === 'BR') {
+                                                                    next.remove();
+                                                                }
+                                                                const parent = img.parentElement;
+                                                                if (parent && parent !== root) {
+                                                                    const tag = parent.tagName.toLowerCase();
+                                                                    if (tag === 'p' || tag === 'div' || tag === 'li' || tag === 'span') {
+                                                                        parent.style.display = 'flex';
+                                                                        parent.style.alignItems = 'center';
+                                                                        parent.style.gap = '6px';
+                                                                        parent.style.flexWrap = 'wrap';
+                                                                    }
+                                                                }
+                                                            });
+                                                        };
+                                                        normalizeAttachmentLayout(attachmentSection);
 
                                                         // 如果没有任何内容被添加，显示提示信息
                                                         if (addedCount === 0 && tempDiv.textContent.trim().length === 0) {
