@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      2.7
+// @version      2.8
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -19,61 +19,6 @@
     'use strict';
 
     /* global GBK */
-
-    // 禁用 /notice/ 页面自动刷新（防止每 5 分钟刷新导致弹窗丢失）
-    (function disableNoticeAutoRefresh() {
-        try {
-            if (typeof location === 'undefined' || !/\/notice\/?/i.test(location.pathname)) return;
-            const code = function() {
-                try {
-                    // 移除 meta refresh
-                    const removeMetaRefresh = () => {
-                        const metas = document.querySelectorAll('meta[http-equiv="refresh"], meta[http-equiv="Refresh"]');
-                        metas.forEach(m => m.remove());
-                    };
-                    removeMetaRefresh();
-                    const mo = new MutationObserver(removeMetaRefresh);
-                    mo.observe(document.documentElement || document.body, { childList: true, subtree: true });
-
-                    // 兜底：拦截 reload/assign/replace
-                    try { window.location.reload = function() {}; } catch (e) {}
-                    try {
-                        const origAssign = window.location.assign.bind(window.location);
-                        const origReplace = window.location.replace.bind(window.location);
-                        window.location.assign = function(url) { if (url && String(url) !== String(window.location.href)) origAssign(url); };
-                        window.location.replace = function(url) { if (url && String(url) !== String(window.location.href)) origReplace(url); };
-                    } catch (e) {}
-
-                    // 过滤可疑的自动刷新定时器
-                    const isRefreshLike = (fn) => {
-                        if (typeof fn === 'string') {
-                            return /location\\.reload|location\\.href|document\\.location|window\\.location/.test(fn);
-                        }
-                        if (typeof fn !== 'function') return false;
-                        const s = Function.prototype.toString.call(fn);
-                        return /location\\.reload|location\\.href|document\\.location|window\\.location/.test(s);
-                    };
-                    const _setTimeout = window.setTimeout.bind(window);
-                    const _setInterval = window.setInterval.bind(window);
-                    window.setTimeout = function(fn, delay) {
-                        if (isRefreshLike(fn)) return 0;
-                        return _setTimeout(fn, delay);
-                    };
-                    window.setInterval = function(fn, delay) {
-                        if (isRefreshLike(fn)) return 0;
-                        return _setInterval(fn, delay);
-                    };
-                    // 兜底：周期性清理 meta refresh
-                    _setInterval(removeMetaRefresh, 1000 * 30);
-                } catch (e) {}
-            }.toString();
-            const script = document.createElement('script');
-            script.textContent = '(' + code + ')();';
-            const root = document.documentElement || document.head || document;
-            root.appendChild(script);
-            script.remove();
-        } catch (e) {}
-    })();
 
     // 固定浏览器标签页标题
     try {
