@@ -6,6 +6,8 @@
 // @match        https://ssc-platform.shanghai-electric.com/*
 // @run-at       document-start
 // @grant        none
+// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/srm-enter.js
+// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/srm-enter.js
 // ==/UserScript==
 
 (function () {
