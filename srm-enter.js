@@ -2,7 +2,7 @@
 // @name         srm-enter
 // @namespace    https://ssc-platform.shanghai-electric.com/
 // @version      1.0
-// @description  使用enter在srm中搜索
+// @description  在srm中使用enter进行搜索
 // @match        https://ssc-platform.shanghai-electric.com/*
 // @run-at       document-start
 // @grant        none
@@ -101,17 +101,74 @@
     return /\.(js|css|png|jpe?g|gif|svg|woff2?|ttf|eot|ico|webp|mp4|mp3|map)$/i.test(u);
   }
 
+  function getPath(url) {
+    const raw = String(url || '');
+    try {
+      return new URL(raw, location.origin).pathname;
+    } catch (err) {
+      return raw.split(/[?#]/)[0];
+    }
+  }
+
+  function getUrlText(url) {
+    try {
+      return new URL(String(url || ''), location.origin).href;
+    } catch (err) {
+      return String(url || '');
+    }
+  }
+
+  // 权限、账号、系统消息、元数据、待办流程等接口必须真实放行。
+  // 这些接口被伪造成空响应时，页面会误判“没有获取到企业权限”。
+  const MUST_ALLOW_PREFIXES = [
+    '/ssc-auth/',
+    '/ssc-metadata/',
+    '/ssc-notification/',
+    '/ssc-opl/',
+    '/ssc-enterprise-purchaser/api/message/',
+    '/ssc-enterprise-purchaser/api/process/',
+  ];
+
+  // 当前脚本只拦协同采购里的表格搜索/列表接口。
+  // 如后续需要覆盖其他业务域，应在这里显式增加，而不是恢复“所有非静态资源”拦截。
+  const SEARCH_API_PREFIXES = [
+    '/ssc-collaboration-purchaser/api/',
+  ];
+
+  function mustAllow(url) {
+    if (isStaticResource(url)) return true;
+    const path = getPath(url);
+    return MUST_ALLOW_PREFIXES.some(function (prefix) {
+      return path.indexOf(prefix) === 0;
+    });
+  }
+
+  function isSearchApi(url) {
+    const path = getPath(url);
+    return SEARCH_API_PREFIXES.some(function (prefix) {
+      return path.indexOf(prefix) === 0;
+    });
+  }
+
   const URL_RE = /[?&](page|pageNumber|pageNo|pageNum|pageIndex|pageSize|size|sizePerPage|current|offset|limit|pn|ps|start|rows)=\d+/i;
   const BODY_RE = /["']?(page|pageNumber|pageNo|pageNum|pageIndex|pageSize|size|sizePerPage|current|offset|limit|pn|ps|start|rows)["']?\s*[:=]\s*\d+/i;
 
   function looksLikeSearch(url, body) {
-    if (URL_RE.test(String(url || ''))) return true;
+    const fullUrl = getUrlText(url);
+    if (URL_RE.test(fullUrl)) return true;
     if (typeof body === 'string' && body && BODY_RE.test(body)) return true;
     return false;
   }
-  function shouldBlock(url, body) {
-    if (Date.now() < forceBlockUntil && !isStaticResource(url)) return true;
-    return Date.now() > armUntil && looksLikeSearch(url, body);
+  function shouldBlock(url, body, method) {
+    const m = String(method || 'GET').toUpperCase();
+    if (m !== 'GET' && m !== 'POST') return false;
+    if (mustAllow(url)) return false;
+
+    const isSearch = isSearchApi(url) && looksLikeSearch(url, body);
+    if (!isSearch) return false;
+
+    if (Date.now() < forceBlockUntil) return true;
+    return Date.now() > armUntil;
   }
 
   function buildFake() {
@@ -135,8 +192,9 @@
   window.fetch = function (input, init) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
     const body = init && init.body != null ? String(init.body) : '';
-    if (shouldBlock(url, body)) {
-      console.warn('[SRM 拦截 fetch]', url);
+    const method = (init && init.method) || (input && input.method) || 'GET';
+    if (shouldBlock(url, body, method)) {
+      console.warn('[SRM 拦截 fetch v3.6]', url);
       return Promise.resolve(new Response(JSON.stringify(buildFake()), {
         status: 200, statusText: 'OK',
         headers: { 'content-type': 'application/json;charset=UTF-8' }
@@ -148,15 +206,16 @@
   const origOpen = XMLHttpRequest.prototype.open;
   const origSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url) {
+    this.__srmMethod = method || 'GET';
     this.__srmUrl = url;
     return origOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function (body) {
     const b = body != null ? String(body) : '';
-    if (!shouldBlock(this.__srmUrl, b)) {
+    if (!shouldBlock(this.__srmUrl, b, this.__srmMethod)) {
       return origSend.apply(this, arguments);
     }
-    console.warn('[SRM 拦截 XHR]', this.__srmUrl);
+    console.warn('[SRM 拦截 XHR v3.6]', this.__srmUrl);
     const self = this;
     const url = self.__srmUrl || '';
     const fakeObj = buildFake();
@@ -198,7 +257,8 @@
     }, 0);
   };
 
-  // 脚本一启动就激活 autoMode，覆盖首次进入
+  // 脚本一启动就激活 autoMode，覆盖首次进入。
+  // v3.6 中 autoMode 只会拦截 SEARCH_API_PREFIXES 范围内的搜索/列表接口。
   setForceBlock(AUTO_BLOCK_MS);
 
   // ========== 3. 放行窗口 ==========
@@ -384,5 +444,5 @@
   }
   startObserving();
 
-  console.log('[SRM 实时搜索拦截 v3.5] 已启用');
+  console.log('[SRM 实时搜索拦截 v3.6] 已启用');
 })();
