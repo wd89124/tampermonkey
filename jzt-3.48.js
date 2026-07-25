@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         制造令/机规/通知单搜索工具
+// @name         制造令/机规/通知单搜索及待办工具
 // @namespace    http://tampermonkey.net/
-// @version      3.0
-// @description  快捷查询制造令/机规/通知单
+// @version      3.48
+// @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
 // @match        http://10.16.88.34/zzl/
@@ -15,8 +15,8 @@
 // @grant        unsafeWindow
 // @connect      64.90.23.77
 // @require      https://cdn.jsdelivr.net/npm/gbk.js@0.3.0/dist/gbk.min.js
-// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
-// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
+// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt-3.48.js
+// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt-3.48.js
 // ==/UserScript==
 
 (function() {
@@ -535,7 +535,7 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.44';
+    const TODO_CLIENT_VERSION = '3.48';
     const TODO_DEVICE_ID_KEY = 'jzt-todo-device-id';
     const TODO_DEVICE_SECRET_KEY = 'jzt-todo-device-secret';
     const TODO_PROFILE_CACHE_KEY = 'jzt-todo-profile-cache';
@@ -598,7 +598,8 @@
                     department: String(cached.department).trim(),
                     displayName: cached.displayName || '',
                     systemName: cached.systemName || '',
-                    receiveTasks: cached.receiveTasks !== false
+                    receiveTasks: cached.receiveTasks !== false,
+                    showCreateButtons: cached.showCreateButtons !== false
                 };
             } catch (error) {
                 console.warn('[待办] 本地身份缓存读取失败:', error);
@@ -614,8 +615,21 @@
                 department: profile.department,
                 displayName: profile.displayName || '',
                 systemName: profile.systemName || '',
-                receiveTasks: profile.receiveTasks !== false
+                receiveTasks: profile.receiveTasks !== false,
+                showCreateButtons: profile.showCreateButtons !== false
             }));
+            if (typeof profile.showCreateButtons === 'boolean') {
+                GM_setValue(
+                    TODO_SHOW_CREATE_BUTTONS_KEY,
+                    profile.showCreateButtons
+                );
+                if (
+                    this.searchPanel
+                    && typeof this.searchPanel.updateCreateButtonVisibility === 'function'
+                ) {
+                    this.searchPanel.updateCreateButtonVisibility();
+                }
+            }
         }
 
         clearCachedProfile() {
@@ -1484,10 +1498,10 @@
                 TODO_DESKTOP_NOTIFICATION_KEY,
                 true
             ) !== false;
-            showCreateButtonsInput.checked = GM_getValue(
-                TODO_SHOW_CREATE_BUTTONS_KEY,
-                true
-            ) !== false;
+            showCreateButtonsInput.checked = this.profile
+                && typeof this.profile.showCreateButtons === 'boolean'
+                ? this.profile.showCreateButtons
+                : GM_getValue(TODO_SHOW_CREATE_BUTTONS_KEY, true) !== false;
 
             const syncDesktopNotificationState = () => {
                 const canReceiveTasks = receiveTasksInput.checked;
@@ -1538,19 +1552,18 @@
                         name,
                         department,
                         receiveTasks,
+                        showCreateButtons,
                         systemName: this.systemUser || name,
                         clientVersion: TODO_CLIENT_VERSION,
                         deviceName: 'Tampermonkey浏览器'
                     }
-                    : { name, department, receiveTasks };
+                    : { name, department, receiveTasks, showCreateButtons };
                 this.ensureDeviceCredentials();
                 this.request('POST', path, body).then((payload) => {
                     GM_setValue(
                         TODO_DESKTOP_NOTIFICATION_KEY,
                         desktopNotificationEnabled
                     );
-                    GM_setValue(TODO_SHOW_CREATE_BUTTONS_KEY, showCreateButtons);
-                    this.searchPanel.updateCreateButtonVisibility();
                     this.profile = payload.profile;
                     this.identityReady = true;
                     this.cacheProfile(this.profile);
@@ -3536,7 +3549,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
-
+ 
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
