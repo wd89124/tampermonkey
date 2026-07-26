@@ -76,7 +76,7 @@
             --jigui-primary-dark: #1d4ed8;
             --jigui-primary-soft: #dbeafe;
             --jigui-bg: rgb(255, 245, 230);
-            --jigui-surface: #fff5e6;
+            --jigui-surface: #ffffff;
             --jigui-border: #999;
             --jigui-text: #0f172a;
             --jigui-text-muted: #64748b;
@@ -1432,7 +1432,7 @@
                         `}
                     </div>
                 </div>
-                <div style="padding:14px 18px 18px;overflow-y:auto;background:#fff5e6;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;color:#334155;">
+                <div style="padding:14px 18px 18px;overflow-y:auto;background:#ffffff;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;color:#334155;">
                     <label style="display:block;margin-bottom:13px;font-size:15px;color:#334155;">
                         姓名
                         <input data-field="name" maxlength="30" autocomplete="off" style="display:block;width:100%;height:42px;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#111827;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;outline:none;">
