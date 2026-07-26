@@ -1450,7 +1450,7 @@
                             是否需要接收待办
                         </span>
                         <span style="display:block;margin-top:6px;color:#64748b;font-size:12px;line-height:1.5;">
-                            勾选后，显示待办审批和通知跟踪，并接收其他人发送的待办；取消勾选后，隐藏相关区域、停止连接待办服务器，同时不再出现在接收人列表中。
+                            勾选后，显示待办审批和通知跟踪，并接收其他人发送的待办；<br>取消勾选后，隐藏相关区域、不接受和发送待办，同时不再出现在接收人列表中。
                         </span>
                     </label>
                     <label data-field="desktop-notification-label" style="display:block;margin-bottom:13px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:4px;color:#334155;cursor:pointer;">
