@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      2.8
+// @version      3.0
 // @description  快捷查询制造令/机规/通知单
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -9,8 +9,12 @@
 // @match        http://10.16.88.34/jigui/
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
+// @grant        GM_notification
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @grant        unsafeWindow
-// @require      https://cdn.jsdelivr.net/gh/bestmike007/gbk-lite@4e604273c8b3b3e8731b4452f8dad5ee6c588e92/lib/gbk-lite.min.js
+// @connect      64.90.23.77
+// @require      https://cdn.jsdelivr.net/npm/gbk.js@0.3.0/dist/gbk.min.js
 // @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
 // @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
 // ==/UserScript==
@@ -128,6 +132,21 @@
             border-radius: 2px !important;
             transition: background-color 0.2s ease !important;
         }
+        [id^="jigui-detail-panel-"] .detail-header .detail-todo-btn {
+            width: auto !important;
+            height: 28px !important;
+            padding: 0 !important;
+            margin: 0 26px 0 0 !important;
+            border: none !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            color: #fff !important;
+            font-size: 14px !important;
+            font-weight: 800 !important;
+            line-height: 28px !important;
+            white-space: nowrap !important;
+        }
         #jigui-tabs {
             background: transparent !important;
             border-bottom: 1px solid var(--jigui-border) !important;
@@ -184,11 +203,65 @@
             background: rgb(255, 245, 230) !important;
             border-right: 1px solid var(--jigui-border) !important;
             padding: 0 !important;
-            gap: 8px !important;
+            gap: 0 !important;
+            box-sizing: border-box !important;
+            overflow: hidden !important;
+        }
+        #jzt-profile-card {
+            min-height: 66px !important;
+            margin-top: auto !important;
+            padding: 8px 10px 8px 26px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 10px !important;
+            background: rgb(255, 245, 230) !important;
+            border-top: 1px solid var(--jigui-border) !important;
+            box-sizing: border-box !important;
+            flex: 0 0 auto !important;
+        }
+        #jzt-todo-user {
+            color: #111827 !important;
+            font-size: 22px !important;
+            line-height: 1.1 !important;
+            font-weight: 400 !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+        }
+        #jzt-todo-department {
+            margin-top: 3px !important;
+            color: #374151 !important;
+            font-size: 13px !important;
+            line-height: 1.2 !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+        }
+        #jzt-todo-settings {
+            width: 49px !important;
+            height: 49px !important;
+            flex: 0 0 49px !important;
+            border: none !important;
+            background: rgb(255, 245, 230) !important;
+            color: #2563eb !important;
+            cursor: pointer !important;
+            font-size: 26px !important;
+            line-height: 49px !important;
+            padding: 0 !important;
+            text-align: center !important;
+        }
+        #jzt-search-section {
+            flex: 0 0 auto !important;
+            min-height: 0 !important;
+            padding: 0 0 18px !important;
+            background: rgb(255, 245, 230) !important;
+            border-bottom: 1px solid var(--jigui-border) !important;
             box-sizing: border-box !important;
         }
         #search-control-panel {
             width: auto !important;
+            margin-top: 8px !important;
             padding: 8px 0 0 0 !important;
             background: transparent !important;
             border-right: none !important;
@@ -268,7 +341,11 @@
         #search-btn {
             background: #0066cc !important;
             box-shadow: none !important;
-            margin-top: 10px !important;
+            margin-top: 0 !important;
+        }
+        #search-btn-wrapper {
+            padding: 10px 20px 0 !important;
+            box-sizing: border-box !important;
         }
         #create-jigui-btn,
         #create-tongzhi-btn {
@@ -348,11 +425,39 @@
         #create-jigui-btn-wrapper,
         #create-tongzhi-btn-wrapper {
             margin-top: 0 !important;
-            padding: 0 !important;
-            position: absolute !important;
-            left: 20px !important;
-            right: 20px !important;
-            bottom: 20px !important;
+            margin-left: 12px !important;
+            margin-right: 12px !important;
+            padding: 10px 8px 0 !important;
+            position: static !important;
+            left: auto !important;
+            right: auto !important;
+            bottom: auto !important;
+            border-top: none !important;
+        }
+        #jzt-todo-panel {
+            flex: 1 1 auto !important;
+            min-height: 170px !important;
+            max-height: none !important;
+            margin: 0 !important;
+            border: none !important;
+            background: rgb(255, 245, 230) !important;
+            display: flex !important;
+            flex-direction: column !important;
+            overflow: hidden !important;
+        }
+        #jzt-todo-panel,
+        #jzt-todo-panel * {
+            font-family: "Microsoft YaHei", "微软雅黑", sans-serif !important;
+        }
+        #jzt-todo-list {
+            padding: 2px 8px 10px !important;
+            overflow-y: auto !important;
+            min-height: 0 !important;
+            flex: 1 1 auto !important;
+            background: rgb(255, 245, 230) !important;
+        }
+        #jzt-todo-list::-webkit-scrollbar-track {
+            background: rgb(255, 245, 230) !important;
         }
         #search-result a,
         .jigui-page-link {
@@ -428,6 +533,1550 @@
     `;
     document.head.appendChild(themeStyle);
 
+    const TODO_API_BASE = 'https://64.90.23.77/api/v2';
+    const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
+    const TODO_CLIENT_VERSION = '3.44';
+    const TODO_DEVICE_ID_KEY = 'jzt-todo-device-id';
+    const TODO_DEVICE_SECRET_KEY = 'jzt-todo-device-secret';
+    const TODO_PROFILE_CACHE_KEY = 'jzt-todo-profile-cache';
+    const TODO_USER_DIRECTORY_CACHE_KEY = 'jzt-todo-user-directory-cache';
+    const TODO_DESKTOP_NOTIFICATION_KEY = 'jzt-todo-desktop-notification-enabled';
+    const TODO_SHOW_CREATE_BUTTONS_KEY = 'jzt-show-create-buttons';
+    const TODO_DEPARTMENTS = [
+        '工厂管理部',
+        '人力资源部',
+        '财务部',
+        '安全环保部',
+        '数字技术部',
+        '采购部',
+        '服务事业部',
+        '能源电力事业部',
+        '工业环保事业部',
+        '调相机事业部',
+        '新产业事业部',
+        '技术中心-技术管理部',
+        '技术中心-系统开发部',
+        '技术中心-技术发展部',
+        '技术中心-设计部',
+        '技术中心-工艺部',
+        '制造中心-综合管理室',
+        '制造中心-制造部',
+        '制造中心-计划物流部',
+        '制造中心-临港发电机部',
+        '质控部'
+    ];
+
+    class TodoManager {
+        constructor(searchPanel) {
+            this.searchPanel = searchPanel;
+            this.systemUser = '';
+            this.profile = this.loadCachedProfile();
+            this.identityReady = false;
+            this.deviceId = '';
+            this.deviceSecret = '';
+            this.tasks = [];
+            this.trackings = [];
+            this.pollTimer = null;
+            this.presenceTimer = null;
+            const directoryCache = this.loadUserDirectoryCache();
+            this.userDirectoryCache = directoryCache.users;
+            this.userDirectoryCachedAt = directoryCache.cachedAt;
+            this.userDirectoryPromise = null;
+            this.initialized = false;
+        }
+
+        loadCachedProfile() {
+            try {
+                const raw = GM_getValue(TODO_PROFILE_CACHE_KEY, '');
+                const cached = typeof raw === 'string' ? JSON.parse(raw || 'null') : raw;
+                if (!cached || typeof cached !== 'object') return null;
+                if (!String(cached.name || '').trim()) return null;
+                if (!String(cached.department || '').trim()) return null;
+                return {
+                    id: cached.id || '',
+                    name: String(cached.name).trim(),
+                    department: String(cached.department).trim(),
+                    displayName: cached.displayName || '',
+                    systemName: cached.systemName || '',
+                    receiveTasks: cached.receiveTasks !== false
+                };
+            } catch (error) {
+                console.warn('[待办] 本地身份缓存读取失败:', error);
+                return null;
+            }
+        }
+
+        cacheProfile(profile) {
+            if (!profile || !profile.name || !profile.department) return;
+            GM_setValue(TODO_PROFILE_CACHE_KEY, JSON.stringify({
+                id: profile.id || '',
+                name: profile.name,
+                department: profile.department,
+                displayName: profile.displayName || '',
+                systemName: profile.systemName || '',
+                receiveTasks: profile.receiveTasks !== false
+            }));
+        }
+
+        clearCachedProfile() {
+            GM_setValue(TODO_PROFILE_CACHE_KEY, '');
+        }
+
+        loadUserDirectoryCache() {
+            try {
+                const raw = GM_getValue(TODO_USER_DIRECTORY_CACHE_KEY, '');
+                const cached = typeof raw === 'string'
+                    ? JSON.parse(raw || 'null')
+                    : raw;
+                if (!cached || !Array.isArray(cached.users)) {
+                    return { users: [], cachedAt: 0 };
+                }
+                return {
+                    users: cached.users,
+                    cachedAt: Number(cached.cachedAt) || 0
+                };
+            } catch (error) {
+                console.warn('[待办] 本地用户目录缓存读取失败:', error);
+                return { users: [], cachedAt: 0 };
+            }
+        }
+
+        cacheUserDirectory(users) {
+            this.userDirectoryCache = Array.isArray(users) ? users : [];
+            this.userDirectoryCachedAt = Date.now();
+            GM_setValue(TODO_USER_DIRECTORY_CACHE_KEY, JSON.stringify({
+                cachedAt: this.userDirectoryCachedAt,
+                users: this.userDirectoryCache
+            }));
+        }
+
+        init() {
+            if (this.initialized) return;
+            this.initialized = true;
+            this.updateIdentityDisplay();
+            if (this.profile && this.profile.receiveTasks === false) {
+                this.systemUser = this.readCurrentUser()
+                    || this.profile.systemName
+                    || this.profile.name;
+                this.identityReady = true;
+                this.disableTodoServices();
+                return;
+            }
+            this.waitForCurrentUser();
+        }
+
+        waitForCurrentUser() {
+            let attempts = 0;
+            const tryRead = () => {
+                attempts += 1;
+                const user = this.readCurrentUser();
+                if (user) {
+                    this.systemUser = user;
+                    this.initializeIdentity();
+                    return;
+                }
+                if (attempts < 40) {
+                    window.setTimeout(tryRead, 500);
+                } else {
+                    this.renderState('未识别到“当前用户”，待办功能暂不可用');
+                }
+            };
+            tryRead();
+        }
+
+        readCurrentUser() {
+            const text = document.body ? (document.body.innerText || document.body.textContent || '') : '';
+            const match = text.match(/当前用户\s*[：:]\s*([^\s，,；;|<>]{1,40})/);
+            return match ? match[1].trim() : '';
+        }
+
+        generateUuid() {
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                return window.crypto.randomUUID();
+            }
+            const bytes = new Uint8Array(16);
+            window.crypto.getRandomValues(bytes);
+            bytes[6] = (bytes[6] & 0x0f) | 0x40;
+            bytes[8] = (bytes[8] & 0x3f) | 0x80;
+            const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+            return [
+                hex.slice(0, 8),
+                hex.slice(8, 12),
+                hex.slice(12, 16),
+                hex.slice(16, 20),
+                hex.slice(20)
+            ].join('-');
+        }
+
+        generateSecret() {
+            const bytes = new Uint8Array(32);
+            window.crypto.getRandomValues(bytes);
+            return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+        }
+
+        initializeIdentity() {
+            this.ensureDeviceCredentials();
+            this.request('GET', '/identity/me').then((payload) => {
+                this.profile = payload.profile;
+                this.identityReady = true;
+                this.cacheProfile(this.profile);
+                this.startIdentityServices();
+            }).catch((error) => {
+                if (error.status === 401) {
+                    this.profile = null;
+                    this.identityReady = false;
+                    this.clearCachedProfile();
+                    this.updateIdentityDisplay();
+                    this.renderState('请先完成待办身份设置');
+                    this.openIdentityDialog(true);
+                    return;
+                }
+                console.warn('[待办] 身份读取失败:', error.message);
+                this.renderState('待办服务器连接失败，稍后请刷新页面重试');
+            });
+        }
+
+        ensureDeviceCredentials() {
+            this.deviceId = this.deviceId || GM_getValue(TODO_DEVICE_ID_KEY, '');
+            this.deviceSecret = this.deviceSecret || GM_getValue(TODO_DEVICE_SECRET_KEY, '');
+            if (!this.deviceId || !this.deviceSecret) {
+                this.deviceId = this.generateUuid();
+                this.deviceSecret = this.generateSecret();
+                GM_setValue(TODO_DEVICE_ID_KEY, this.deviceId);
+                GM_setValue(TODO_DEVICE_SECRET_KEY, this.deviceSecret);
+            }
+        }
+
+        startIdentityServices() {
+            this.updateIdentityDisplay();
+            if (!this.profile || this.profile.receiveTasks === false) {
+                this.disableTodoServices();
+                return;
+            }
+            this.setTodoPanelEnabled(true);
+            this.registerPresence();
+            this.applyReceiveTaskState(true);
+            this.refreshUserDirectoryCache().catch((error) => {
+                console.warn('[待办] 用户目录预加载失败，继续使用本地缓存:', error.message);
+            });
+            if (!this.presenceTimer) {
+                this.presenceTimer = window.setInterval(() => this.registerPresence(), 300000);
+            }
+        }
+
+        applyReceiveTaskState(notifyNew) {
+            const enabled = !!(this.profile && this.profile.receiveTasks !== false);
+            if (!enabled) {
+                this.disableTodoServices();
+                return;
+            }
+            this.setTodoPanelEnabled(true);
+            this.refreshTasks(!!notifyNew);
+            if (!this.pollTimer) {
+                this.pollTimer = window.setInterval(() => this.refreshTasks(false), 30000);
+            }
+        }
+
+        setTodoPanelEnabled(enabled) {
+            const panel = this.searchPanel && this.searchPanel.panel
+                ? this.searchPanel.panel.querySelector('#jzt-todo-panel')
+                : null;
+            if (!panel) return;
+            panel.style.setProperty(
+                'display',
+                enabled ? 'flex' : 'none',
+                'important'
+            );
+        }
+
+        disableTodoServices() {
+            if (this.pollTimer) {
+                window.clearInterval(this.pollTimer);
+                this.pollTimer = null;
+            }
+            if (this.presenceTimer) {
+                window.clearInterval(this.presenceTimer);
+                this.presenceTimer = null;
+            }
+            this.tasks = [];
+            this.trackings = [];
+            const container = this.searchPanel
+                && this.searchPanel._els
+                && this.searchPanel._els.todoList;
+            if (container) container.innerHTML = '';
+            this.setTodoPanelEnabled(false);
+            this.updateIdentityDisplay();
+        }
+
+        request(method, path, body) {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method,
+                    url: TODO_API_BASE + path,
+                    headers: {
+                        'Authorization': 'Bearer ' + TODO_API_TOKEN,
+                        'Content-Type': 'application/json',
+                        'X-JZT-Device-ID': this.deviceId || '',
+                        'X-JZT-Device-Secret': this.deviceSecret || ''
+                    },
+                    data: body === undefined ? undefined : JSON.stringify(body),
+                    timeout: 15000,
+                    onload: (response) => {
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(response.responseText || '{}');
+                        } catch (e) {
+                            reject(new Error('待办服务器返回了无法识别的数据'));
+                            return;
+                        }
+                        if (response.status >= 200 && response.status < 300 && payload.ok !== false) {
+                            resolve(payload);
+                            return;
+                        }
+                        const error = new Error(payload.error || ('待办服务器请求失败（' + response.status + '）'));
+                        error.status = response.status;
+                        error.payload = payload;
+                        reject(error);
+                    },
+                    onerror: () => reject(new Error('无法连接待办服务器')),
+                    ontimeout: () => reject(new Error('连接待办服务器超时'))
+                });
+            });
+        }
+
+        registerPresence() {
+            if (!this.profile || this.profile.receiveTasks === false) {
+                return Promise.resolve();
+            }
+            return this.request('POST', '/presence', {
+                clientVersion: TODO_CLIENT_VERSION
+            }).catch((error) => {
+                console.warn('[待办] 用户登记失败:', error.message);
+                this.renderState('待办服务器连接失败，稍后自动重试');
+            });
+        }
+
+        refreshTasks(notifyNew) {
+            if (!this.profile || this.profile.receiveTasks === false) {
+                this.disableTodoServices();
+                return Promise.resolve();
+            }
+            const receivedRequest = this.request('GET', '/tasks?scope=received&status=pending');
+            const trackingRequest = this.request('GET', '/tracking');
+            return Promise.all([receivedRequest, trackingRequest]).then((payloads) => {
+                if (!this.profile || this.profile.receiveTasks === false) {
+                    this.disableTodoServices();
+                    return;
+                }
+                this.tasks = Array.isArray(payloads[0].tasks) ? payloads[0].tasks : [];
+                this.trackings = Array.isArray(payloads[1].trackings)
+                    ? payloads[1].trackings
+                    : [];
+                this.renderTasks();
+                this.notifyNewTasks();
+            }).catch((error) => {
+                console.warn('[待办] 获取清单失败:', error.message);
+                this.renderState('待办清单获取失败，30秒后重试');
+            });
+        }
+
+        notifyNewTasks() {
+            this.tasks.forEach((task) => {
+                if (task.isRead) return;
+                const storageKey = 'jzt-todo-notified-' + task.id;
+                if (localStorage.getItem(storageKey) === '1') return;
+                localStorage.setItem(storageKey, '1');
+                if (GM_getValue(TODO_DESKTOP_NOTIFICATION_KEY, true) === false) return;
+                if (typeof GM_notification !== 'function') return;
+                try {
+                    const senderDisplay = this.formatTaskSender(task);
+                    GM_notification({
+                        title: '新的' + task.taskType + '待办',
+                        text: task.docNo + '（来自：' + senderDisplay + '）',
+                        timeout: 12000,
+                        onclick: () => this.openTask(task)
+                    });
+                } catch (error) {
+                    console.warn('[待办] 桌面通知失败:', error);
+                }
+            });
+        }
+
+        getCompletedLabel(task) {
+            const labels = {
+                '待校核': '已校核',
+                '待批准': '已批准',
+                '待会签': '已会签'
+            };
+            return labels[String(task && task.taskType || '').trim()] || '已完成';
+        }
+
+        formatTaskSender(task) {
+            const senderName = String(task && task.senderName || '').trim();
+            const senderDepartment = String(task && task.senderDepartment || '').trim();
+            if (task && task.senderHasDuplicateName && senderName && senderDepartment) {
+                return senderName + '（' + senderDepartment + '）';
+            }
+            if (senderName) return senderName;
+            return String(task && task.sender || '')
+                .replace(/（[^（）]*）\s*$/, '')
+                .trim();
+        }
+
+        renderState(message) {
+            const container = this.searchPanel && this.searchPanel._els
+                ? this.searchPanel._els.todoList
+                : null;
+            if (container) {
+                container.innerHTML = '';
+                const item = document.createElement('div');
+                item.style.cssText = 'padding: 8px 4px; color: #64748b; font-size: 13px; line-height: 1.5;';
+                item.textContent = message;
+                container.appendChild(item);
+            }
+        }
+
+        renderTasks() {
+            const container = this.searchPanel._els && this.searchPanel._els.todoList;
+            if (!container) return;
+            this.updateIdentityDisplay();
+            container.innerHTML = '';
+
+            if (!this.tasks.length && !this.trackings.length) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'padding: 12px 4px; color: #64748b; font-size: 13px; text-align: center;';
+                empty.textContent = this.profile && this.profile.receiveTasks === false
+                    ? '已关闭待办接收，暂无通知跟踪'
+                    : '暂无待办';
+                container.appendChild(empty);
+                return;
+            }
+
+            if (this.tasks.length) {
+                container.appendChild(this.createGroupTitle('待办审批'));
+                this.tasks.forEach((task, index) => {
+                    const taskCard = this.createTaskCard(task);
+                    if (this.trackings.length && index === this.tasks.length - 1) {
+                        taskCard.style.marginBottom = '0';
+                    }
+                    container.appendChild(taskCard);
+                });
+            }
+            if (this.trackings.length) {
+                container.appendChild(this.createGroupTitle('通知跟踪'));
+                this.trackings.forEach((tracking) => {
+                    container.appendChild(this.createTrackingCard(tracking));
+                });
+            }
+        }
+
+        createGroupTitle(text) {
+            const title = document.createElement('div');
+            title.style.cssText = [
+                'display:flex',
+                'align-items:center',
+                'gap:8px',
+                'height:28px',
+                'padding:2px 2px',
+                'color:#111111',
+                'font-size:18px',
+                'font-weight:700',
+                'box-sizing:border-box'
+            ].join(';');
+            const leftLine = document.createElement('span');
+            const label = document.createElement('span');
+            const rightLine = document.createElement('span');
+            leftLine.style.cssText = 'height:2px;background:#a6a6a6;flex:1 1 auto;';
+            rightLine.style.cssText = leftLine.style.cssText;
+            label.style.cssText = 'flex:0 0 auto;white-space:nowrap;';
+            label.textContent = text;
+            title.appendChild(leftLine);
+            title.appendChild(label);
+            title.appendChild(rightLine);
+            return title;
+        }
+
+        getTaskTypeColors(taskType) {
+            if (taskType === '待会签') {
+                return {
+                    border: 'rgb(91, 155, 213)',
+                    text: '#1f2937',
+                    background: 'rgb(189, 215, 238)',
+                    badgeBorder: 'rgb(189, 215, 238)'
+                };
+            }
+            if (taskType === '待批准') {
+                return {
+                    border: 'rgb(112, 173, 71)',
+                    text: '#1f2937',
+                    background: 'rgb(197, 224, 180)',
+                    badgeBorder: 'rgb(197, 224, 180)'
+                };
+            }
+            return {
+                border: 'rgb(237, 125, 49)',
+                text: '#1f2937',
+                background: 'rgb(248, 203, 173)',
+                badgeBorder: 'rgb(248, 203, 173)'
+            };
+        }
+
+        createTaskCard(task) {
+            const typeColors = this.getTaskTypeColors(task.taskType);
+            const card = document.createElement('div');
+            card.setAttribute('role', 'button');
+            card.tabIndex = 0;
+            card.style.cssText = [
+                'display:grid',
+                'grid-template-columns:30px minmax(0,1fr) auto',
+                'grid-template-rows:auto auto',
+                'align-items:center',
+                'column-gap:6px',
+                'row-gap:2px',
+                'width:100%',
+                'min-height:68px',
+                'padding:5px 4px 5px 0',
+                'margin:0 0 5px 0',
+                'border:3px solid ' + typeColors.background,
+                'background:#ffffff',
+                'color:#111111',
+                'text-align:left',
+                'cursor:pointer',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif',
+                'font-size:12px',
+                'line-height:1.35',
+                'box-sizing:border-box'
+            ].join(';');
+
+            const statusStrip = document.createElement('span');
+            statusStrip.textContent = Array.from(task.taskType).join('\n');
+            statusStrip.style.cssText = [
+                'grid-column:1',
+                'grid-row:1/3',
+                'align-self:stretch',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'min-width:30px',
+                'margin:-5px 0 -5px 0',
+                'background:' + typeColors.background,
+                'color:#111111',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif',
+                'font-size:16px',
+                'font-weight:700',
+                'line-height:1.05',
+                'letter-spacing:0',
+                'white-space:pre-line',
+                'text-align:center'
+            ].join(';');
+
+            const textBlock = document.createElement('div');
+            textBlock.style.cssText = [
+                'grid-column:2',
+                'grid-row:1/3',
+                'align-self:stretch',
+                'display:flex',
+                'flex-direction:column',
+                'align-items:flex-start',
+                'justify-content:center',
+                'gap:8px',
+                'min-width:0',
+                'overflow:hidden',
+                'text-align:left'
+            ].join(';');
+
+            const docNumber = document.createElement('div');
+            docNumber.style.cssText = 'width:100%;min-width:0;overflow:hidden;font-size:15px;font-weight:700;color:#111111;text-align:left;text-overflow:ellipsis;white-space:nowrap;';
+            docNumber.textContent = task.docNo;
+
+            const completeButton = document.createElement('button');
+            completeButton.type = 'button';
+            completeButton.textContent = '完成';
+            completeButton.title = '完成此待办并同步到通知发起人的跟踪界面';
+            completeButton.style.cssText = [
+                'grid-column:3',
+                'grid-row:2',
+                'align-self:end',
+                'justify-self:end',
+                'height:22px',
+                'padding:0 8px',
+                'border:1px solid ' + typeColors.border,
+                'border-radius:6px',
+                'background:#ffffff',
+                'color:#111111',
+                'white-space:nowrap',
+                'font-size:12px',
+                'line-height:20px',
+                'font-weight:400',
+                'cursor:pointer'
+            ].join(';');
+            completeButton.addEventListener('click', (event) => {
+                this.completeTask(task, event, completeButton);
+            });
+
+            const secondLine = document.createElement('div');
+            secondLine.style.cssText = 'width:100%;min-width:0;overflow:hidden;color:#333333;font-size:13px;text-align:left;text-overflow:ellipsis;white-space:nowrap;';
+            secondLine.textContent = '来自：' + this.formatTaskSender(task)
+                + (task.message ? (' · ' + task.message) : '');
+
+            textBlock.appendChild(docNumber);
+            textBlock.appendChild(secondLine);
+            card.appendChild(statusStrip);
+            card.appendChild(textBlock);
+            card.appendChild(completeButton);
+            card.addEventListener('click', () => this.openTask(task));
+            card.addEventListener('keydown', (event) => {
+                if (event.target !== card) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    this.openTask(task);
+                }
+            });
+            return card;
+        }
+
+        createTrackingCard(tracking) {
+            const allCompleted = Boolean(
+                tracking.stages
+                && tracking.stages.length
+                && tracking.stages.every((stage) => stage.status === 'completed')
+            );
+            const card = document.createElement('div');
+            card.setAttribute('role', 'button');
+            card.tabIndex = 0;
+            card.style.cssText = [
+                'display:grid',
+                'grid-template-columns:minmax(0,1fr) auto',
+                'align-items:center',
+                'column-gap:5px',
+                'row-gap:3px',
+                'width:100%',
+                'min-height:62px',
+                'padding:5px 5px 5px 8px',
+                'margin:0 0 5px 0',
+                'border:1px solid ' + (allCompleted ? 'rgb(112, 173, 71)' : 'rgb(201, 201, 201)'),
+                'border-left:7px solid ' + (allCompleted ? 'rgb(112, 173, 71)' : 'rgb(201, 201, 201)'),
+                'background:' + (allCompleted ? 'rgba(197, 224, 180, 0.55)' : 'rgb(237, 237, 237)'),
+                'color:#111111',
+                'cursor:pointer',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif',
+                'box-sizing:border-box'
+            ].join(';');
+
+            const docNumber = document.createElement('div');
+            docNumber.style.cssText = 'min-width:0;overflow:hidden;color:#111111;font-size:15px;font-weight:700;text-align:left;text-overflow:ellipsis;white-space:nowrap;';
+            docNumber.textContent = tracking.docNo;
+
+            const closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.textContent = '关闭';
+            closeButton.title = '关闭此通知单的跟踪行';
+            closeButton.style.cssText = 'height:22px;padding:0 8px;border:1px solid rgb(201, 201, 201);border-radius:6px;background:#fff;color:#111;font-size:12px;line-height:20px;font-weight:400;cursor:pointer;';
+            closeButton.addEventListener('click', (event) => {
+                this.closeTracking(tracking, event, closeButton);
+            });
+
+            const stages = document.createElement('div');
+            stages.style.cssText = 'grid-column:1/-1;display:flex;align-items:flex-start;justify-content:space-between;gap:6px;min-width:0;';
+            const pendingStages = document.createElement('div');
+            pendingStages.style.cssText = 'display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:4px;min-width:0;flex:1 1 auto;';
+            const completedStages = document.createElement('div');
+            completedStages.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:4px;min-width:0;flex:0 1 auto;margin-left:auto;';
+            (tracking.stages || []).forEach((stage) => {
+                const completed = stage.status === 'completed';
+                const badge = document.createElement('span');
+                let label = completed
+                    ? this.getCompletedLabel({ taskType: stage.taskType })
+                    : stage.taskType;
+                if (Number(stage.total) > 1) {
+                    label += ' ' + Number(stage.completed || 0) + '/' + Number(stage.total);
+                }
+                const colors = completed
+                    ? { text: '#ffffff', background: 'rgb(112, 173, 71)', border: 'rgb(112, 173, 71)' }
+                    : this.getTaskTypeColors(stage.taskType);
+                badge.textContent = label;
+                badge.style.cssText = [
+                    'height:22px',
+                    'padding:0 7px',
+                    'border-radius:5px',
+                    'white-space:nowrap',
+                    'font-size:12px',
+                    'line-height:20px',
+                    'font-weight:700',
+                    'color:' + colors.text,
+                    'background:' + colors.background,
+                    'border:1px solid ' + (colors.badgeBorder || colors.border)
+                ].join(';');
+                if (completed) {
+                    completedStages.appendChild(badge);
+                } else {
+                    pendingStages.appendChild(badge);
+                }
+            });
+            stages.appendChild(pendingStages);
+            stages.appendChild(completedStages);
+
+            card.appendChild(docNumber);
+            card.appendChild(closeButton);
+            card.appendChild(stages);
+            card.addEventListener('click', () => {
+                this.searchPanel.openDetailPanel(
+                    tracking.url,
+                    tracking.docNo,
+                    this.getSourceTabFromUrl(tracking.url)
+                );
+            });
+            card.addEventListener('keydown', (event) => {
+                if (event.target !== card) return;
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    this.searchPanel.openDetailPanel(
+                        tracking.url,
+                        tracking.docNo,
+                        this.getSourceTabFromUrl(tracking.url)
+                    );
+                }
+            });
+            return card;
+        }
+
+        completeTask(task, event, button) {
+            if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            if (!task || !this.profile || (button && button.disabled)) return;
+            if (button) {
+                button.disabled = true;
+                button.textContent = '处理中';
+            }
+            this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/complete', {
+                source: 'manual-complete-button'
+            }).then(() => {
+                this.tasks = this.tasks.filter((item) => item.id !== task.id);
+                this.renderTasks();
+                return this.refreshTasks(false);
+            }).catch((error) => {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '完成';
+                }
+                window.alert('待办完成失败：' + error.message);
+            });
+        }
+
+        closeTracking(tracking, event, button) {
+            if (event) {
+                event.preventDefault();
+                event.stopPropagation();
+            }
+            if (!tracking || !this.profile || (button && button.disabled)) return;
+            if (button) {
+                button.disabled = true;
+                button.textContent = '关闭中';
+            }
+            this.request(
+                'POST',
+                '/tracking/' + encodeURIComponent(tracking.id) + '/close',
+                {}
+            ).then(() => {
+                this.trackings = this.trackings.filter((item) => item.id !== tracking.id);
+                this.renderTasks();
+            }).catch((error) => {
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '关闭';
+                }
+                window.alert('关闭通知跟踪失败：' + error.message);
+            });
+        }
+
+        openTask(task) {
+            if (!task || !task.url) return;
+            this.markRead(task);
+            this.searchPanel.openDetailPanel(
+                task.url,
+                task.docNo,
+                this.getSourceTabFromUrl(task.url)
+            );
+        }
+
+        getSourceTabFromUrl(url) {
+            const value = String(url || '');
+            if (/\/jigui\//i.test(value)) return 'jigui';
+            if (/\/notice\//i.test(value)) return 'tongzhi';
+            if (/\/zzl\//i.test(value)) return 'zhiling';
+            return undefined;
+        }
+
+        markRead(task) {
+            if (!task || task.isRead || !this.profile) return;
+            task.isRead = true;
+            this.renderTasks();
+            this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/read', {})
+                .then(() => this.refreshTasks(false)).catch((error) => {
+                console.warn('[待办] 标记已读失败:', error.message);
+            });
+        }
+
+        refreshUserDirectoryCache() {
+            if (!this.profile || this.profile.receiveTasks === false) {
+                return Promise.resolve(this.userDirectoryCache.slice());
+            }
+            if (this.userDirectoryPromise) return this.userDirectoryPromise;
+            this.userDirectoryPromise = this.request('GET', '/users')
+                .then((payload) => {
+                    const users = (Array.isArray(payload.users) ? payload.users : [])
+                        .filter((user) => this.isClientVersionAtLeast3(user.clientVersion));
+                    this.cacheUserDirectory(users);
+                    return users.slice();
+                })
+                .finally(() => {
+                    this.userDirectoryPromise = null;
+                });
+            return this.userDirectoryPromise;
+        }
+
+        getCachedUserDirectory() {
+            if (this.userDirectoryPromise) {
+                return this.userDirectoryPromise
+                    .catch(() => this.userDirectoryCache.slice());
+            }
+            return Promise.resolve(this.userDirectoryCache.slice());
+        }
+
+        isClientVersionAtLeast3(version) {
+            const match = String(version || '').trim().match(/^(\d+)(?:\.(\d+))?/);
+            return !!match && Number(match[1]) >= 3;
+        }
+
+        updateIdentityDisplay() {
+            const userLabel = this.searchPanel._els && this.searchPanel._els.todoUser;
+            const departmentLabel = this.searchPanel._els && this.searchPanel._els.todoDepartment;
+            const settingsButton = this.searchPanel._els && this.searchPanel._els.todoSettings;
+            if (userLabel) {
+                userLabel.textContent = this.profile ? this.profile.name : '待办身份未设置';
+            }
+            if (departmentLabel) {
+                departmentLabel.textContent = this.profile
+                    ? this.profile.department
+                    : '请点击右侧设置';
+            }
+            if (settingsButton) {
+                const canOpenSettings = !!(this.profile && this.identityReady);
+                settingsButton.disabled = !canOpenSettings;
+                settingsButton.style.opacity = canOpenSettings ? '1' : '0.45';
+            }
+        }
+
+        openIdentityDialog(isFirstSetup) {
+            const old = document.getElementById('jzt-identity-dialog-overlay');
+            if (old) old.remove();
+
+            const overlay = document.createElement('div');
+            overlay.id = 'jzt-identity-dialog-overlay';
+            overlay.style.cssText = [
+                'position:fixed',
+                'inset:0',
+                'background:rgba(15,23,42,.45)',
+                'z-index:310000',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif'
+            ].join(';');
+
+            const dialog = document.createElement('div');
+            dialog.id = 'jigui-detail-panel-settings-dialog';
+            dialog.style.cssText = [
+                'width:430px',
+                'max-width:calc(100vw - 40px)',
+                'max-height:calc(100vh - 40px)',
+                'background:#fff',
+                'border:1px solid #dbe3ef',
+                'border-radius:0',
+                'box-shadow:0 16px 40px rgba(15,23,42,.16)',
+                'overflow:hidden',
+                'box-sizing:border-box',
+                'display:flex',
+                'flex-direction:column',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif',
+                'font-size:15px',
+                'color:#334155'
+            ].join(';');
+            dialog.innerHTML = `
+                <div class="detail-header" style="background:rgb(30,80,220);color:white;height:40px;padding:0;border-radius:0;display:flex;justify-content:space-between;align-items:center;min-height:40px;box-sizing:border-box;">
+                    <span class="detail-title" style="font-weight:bold;line-height:1;display:flex;align-items:center;padding-left:0;margin-left:-8px;">📄 设置</span>
+                    <div style="display:flex;align-items:center;gap:0;height:100%;margin-right:-6px;">
+                        ${isFirstSetup ? '' : `
+                            <button class="detail-close-btn" type="button" data-action="close" title="关闭" aria-label="关闭" style="width:24px;height:24px;background:none;border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;margin:0;transition:background-color .2s;line-height:1;">
+                                <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
+                                    <line x1="2.2" y1="2.2" x2="9.8" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                                    <line x1="9.8" y1="2.2" x2="2.2" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                                </svg>
+                            </button>
+                        `}
+                    </div>
+                </div>
+                <div style="padding:14px 18px 18px;overflow-y:auto;background:#fff9f1;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;color:#334155;">
+                    <label style="display:block;margin-bottom:13px;font-size:15px;color:#334155;">
+                        姓名
+                        <input data-field="name" maxlength="30" autocomplete="off" style="display:block;width:100%;height:42px;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#111827;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;outline:none;">
+                    </label>
+                    <label style="display:block;margin-bottom:13px;font-size:15px;color:#334155;">
+                        部门
+                        <select data-field="department" style="display:block;width:100%;height:42px;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#111827;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;">
+                            <option value="">请选择部门</option>
+                            ${TODO_DEPARTMENTS.map((department) => `<option value="${department}">${department}</option>`).join('')}
+                        </select>
+                    </label>
+                    <label style="display:block;margin-bottom:13px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:4px;color:#334155;cursor:pointer;">
+                        <span style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;">
+                            <input type="checkbox" data-field="receive-tasks" style="width:17px;height:17px;margin:0;cursor:pointer;">
+                            是否需要接收待办
+                        </span>
+                        <span style="display:block;margin-top:6px;color:#64748b;font-size:12px;line-height:1.5;">
+                            勾选后，显示待办审批和通知跟踪，并接收其他人发送的待办；取消勾选后，隐藏相关区域、停止连接待办服务器，同时不再出现在接收人列表中。
+                        </span>
+                    </label>
+                    <label data-field="desktop-notification-label" style="display:block;margin-bottom:13px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:4px;color:#334155;cursor:pointer;">
+                        <span style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;">
+                            <input type="checkbox" data-field="desktop-notification" style="width:17px;height:17px;margin:0;cursor:pointer;">
+                            显示浏览器桌面通知
+                        </span>
+                        <span style="display:block;margin-top:6px;color:#64748b;font-size:12px;line-height:1.5;">
+                            仅影响当前浏览器；关闭后待办仍会显示在左侧清单中。
+                        </span>
+                    </label>
+                    <label style="display:block;margin-bottom:13px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:4px;color:#334155;cursor:pointer;">
+                        <span style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;">
+                            <input type="checkbox" data-field="show-create-buttons" style="width:17px;height:17px;margin:0;cursor:pointer;">
+                            是否显示创建机规/通知单按钮
+                        </span>
+                        <span style="display:block;margin-top:6px;color:#64748b;font-size:12px;line-height:1.5;">
+                            取消勾选后，仅隐藏左侧创建按钮，不影响搜索和待办功能。
+                        </span>
+                    </label>
+                    <div data-field="status" style="min-height:20px;margin-bottom:10px;color:#64748b;font-size:13px;"></div>
+                    <div style="display:flex;justify-content:flex-end;gap:10px;">
+                        ${isFirstSetup ? '' : '<button type="button" data-action="cancel" style="padding:8px 18px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;">取消</button>'}
+                        <button type="button" data-action="save" style="padding:8px 18px;border:1px solid #1d4ed8;background:#2563eb;color:#fff;border-radius:4px;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;font-weight:700;">保存</button>
+                    </div>
+                </div>
+            `;
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            const nameInput = dialog.querySelector('[data-field="name"]');
+            const departmentInput = dialog.querySelector('[data-field="department"]');
+            const receiveTasksInput = dialog.querySelector('[data-field="receive-tasks"]');
+            const desktopNotificationInput = dialog.querySelector('[data-field="desktop-notification"]');
+            const desktopNotificationLabel = dialog.querySelector('[data-field="desktop-notification-label"]');
+            const showCreateButtonsInput = dialog.querySelector('[data-field="show-create-buttons"]');
+            const statusElement = dialog.querySelector('[data-field="status"]');
+            const saveButton = dialog.querySelector('[data-action="save"]');
+            nameInput.value = this.profile ? this.profile.name : (this.systemUser || '');
+            departmentInput.value = this.profile ? this.profile.department : '';
+            receiveTasksInput.checked = !(
+                this.profile && this.profile.receiveTasks === false
+            );
+            desktopNotificationInput.checked = GM_getValue(
+                TODO_DESKTOP_NOTIFICATION_KEY,
+                true
+            ) !== false;
+            showCreateButtonsInput.checked = GM_getValue(
+                TODO_SHOW_CREATE_BUTTONS_KEY,
+                true
+            ) !== false;
+
+            const syncDesktopNotificationState = () => {
+                const canReceiveTasks = receiveTasksInput.checked;
+                desktopNotificationInput.disabled = !canReceiveTasks;
+                desktopNotificationLabel.style.opacity = canReceiveTasks ? '1' : '0.5';
+                desktopNotificationLabel.style.cursor = canReceiveTasks ? 'pointer' : 'not-allowed';
+            };
+            receiveTasksInput.addEventListener('change', syncDesktopNotificationState);
+            syncDesktopNotificationState();
+
+            const cancelButton = dialog.querySelector('[data-action="cancel"]');
+            if (cancelButton) cancelButton.addEventListener('click', () => overlay.remove());
+            const closeButton = dialog.querySelector('[data-action="close"]');
+            if (closeButton) {
+                closeButton.addEventListener('click', () => overlay.remove());
+                closeButton.addEventListener('mouseenter', () => {
+                    closeButton.style.backgroundColor = 'rgba(255,255,255,.15)';
+                });
+                closeButton.addEventListener('mouseleave', () => {
+                    closeButton.style.backgroundColor = 'transparent';
+                });
+            }
+
+            const save = () => {
+                const name = nameInput.value.trim();
+                const department = departmentInput.value.trim();
+                const receiveTasks = receiveTasksInput.checked;
+                const desktopNotificationEnabled = desktopNotificationInput.checked;
+                const showCreateButtons = showCreateButtonsInput.checked;
+                if (name.length < 2) {
+                    statusElement.textContent = '请输入至少2个字符的姓名。';
+                    statusElement.style.color = '#dc2626';
+                    nameInput.focus();
+                    return;
+                }
+                if (!department) {
+                    statusElement.textContent = '请选择部门。';
+                    statusElement.style.color = '#dc2626';
+                    departmentInput.focus();
+                    return;
+                }
+                saveButton.disabled = true;
+                saveButton.textContent = '保存中...';
+                statusElement.textContent = '';
+                const path = isFirstSetup ? '/identity/register' : '/identity/profile';
+                const body = isFirstSetup
+                    ? {
+                        name,
+                        department,
+                        receiveTasks,
+                        systemName: this.systemUser || name,
+                        clientVersion: TODO_CLIENT_VERSION,
+                        deviceName: 'Tampermonkey浏览器'
+                    }
+                    : { name, department, receiveTasks };
+                this.ensureDeviceCredentials();
+                this.request('POST', path, body).then((payload) => {
+                    GM_setValue(
+                        TODO_DESKTOP_NOTIFICATION_KEY,
+                        desktopNotificationEnabled
+                    );
+                    GM_setValue(TODO_SHOW_CREATE_BUTTONS_KEY, showCreateButtons);
+                    this.searchPanel.updateCreateButtonVisibility();
+                    this.profile = payload.profile;
+                    this.identityReady = true;
+                    this.cacheProfile(this.profile);
+                    overlay.remove();
+                    this.startIdentityServices();
+                }).catch((error) => {
+                    statusElement.textContent = error.message;
+                    statusElement.style.color = '#dc2626';
+                    saveButton.disabled = false;
+                    saveButton.textContent = '保存';
+                });
+            };
+            saveButton.addEventListener('click', save);
+            departmentInput.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') save();
+            });
+            window.setTimeout(() => {
+                if (nameInput.value) departmentInput.focus();
+                else nameInput.focus();
+            }, 50);
+        }
+
+        handleDetailLoaded(panel, iframe, iframeDoc, fallbackUrl) {
+            let actualUrl = fallbackUrl;
+            try {
+                actualUrl = iframe.contentWindow.location.href || fallbackUrl;
+            } catch (e) {}
+            const detailModule = this.getTodoDetailModule(actualUrl);
+            const button = panel.querySelector('.detail-todo-btn');
+            if (!button) return;
+            if (
+                !detailModule
+                || !this.profile
+                || this.profile.receiveTasks === false
+            ) {
+                button.style.display = 'none';
+                button.onclick = null;
+                return;
+            }
+
+            const docNo = this.extractDocNo(panel, iframeDoc);
+            panel.dataset.todoDocNo = docNo;
+            panel.dataset.todoUrl = actualUrl;
+            panel.dataset.todoModule = detailModule.sourceTab;
+            const isOwnDocument = this.isCurrentUserFiller(iframeDoc);
+            button.style.display = isOwnDocument ? 'inline-flex' : 'none';
+            button.onclick = isOwnDocument
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.openCreateDialog({
+                        docNo: docNo || '未识别编号',
+                        title: docNo || detailModule.documentLabel + '待办',
+                        url: actualUrl,
+                        iframeDoc,
+                        sourceTab: detailModule.sourceTab,
+                        documentLabel: detailModule.documentLabel
+                    });
+                }
+                : null;
+            this.syncCompletedTasks(docNo, iframeDoc);
+        }
+
+        getTodoDetailModule(url) {
+            let parsed;
+            try {
+                parsed = new URL(String(url || ''), 'http://10.16.88.34/');
+            } catch (e) {
+                return null;
+            }
+            if (parsed.hostname !== '10.16.88.34') return null;
+            const path = parsed.pathname.toLowerCase();
+            if (path === '/notice/viewarticle.asp') {
+                return { sourceTab: 'tongzhi', documentLabel: '通知单' };
+            }
+            if (
+                path.startsWith('/jigui/')
+                && path.endsWith('.asp')
+                && !/^\/jigui\/(?:search|createnote|index|default)\.asp$/i.test(path)
+            ) {
+                return { sourceTab: 'jigui', documentLabel: '机规' };
+            }
+            return null;
+        }
+
+        normalizePersonName(value) {
+            return String(value || '')
+                .replace(/\u00a0/g, ' ')
+                .trim()
+                .replace(/\s+/g, '')
+                .replace(/[（(].*$/, '');
+        }
+
+        extractFillerName(iframeDoc) {
+            const labeled = this.extractLabelValue(iframeDoc, [
+                '填单人',
+                '填 单 人',
+                '创建人',
+                '创 建 人',
+                '编制人',
+                '编 制 人',
+                '编写人',
+                '编 写 人',
+                '拟制人',
+                '拟 制 人'
+            ]);
+            if (labeled) {
+                return this.normalizePersonName(labeled);
+            }
+            const text = iframeDoc && iframeDoc.body
+                ? (iframeDoc.body.innerText || iframeDoc.body.textContent || '')
+                : '';
+            const match = text.match(
+                /(?:填\s*单\s*人|创\s*建\s*人|编\s*制\s*人|编\s*写\s*人|拟\s*制\s*人)\s*[：:]\s*([^\s，,；;|<>]{1,40})/
+            );
+            return match ? this.normalizePersonName(match[1]) : '';
+        }
+
+        isCurrentUserFiller(iframeDoc) {
+            const fillerName = this.extractFillerName(iframeDoc);
+            if (!fillerName) return false;
+            const currentSystemUser = this.systemUser || this.readCurrentUser();
+            const ownNames = [
+                this.profile && this.profile.name,
+                this.profile && this.profile.systemName,
+                currentSystemUser
+            ]
+                .map((name) => this.normalizePersonName(name))
+                .filter(Boolean);
+            return ownNames.includes(fillerName);
+        }
+
+        extractDocNo(panel, iframeDoc) {
+            const titleElement = panel.querySelector('.detail-title');
+            const panelTitle = titleElement
+                ? (titleElement.textContent || '').replace(/^📄\s*/, '').trim()
+                : '';
+            if (
+                panelTitle
+                && panelTitle !== '详情页面'
+                && panelTitle !== '通知单'
+                && panelTitle !== '机规'
+            ) return panelTitle;
+
+            const labeled = this.extractLabelValue(iframeDoc, [
+                '编号',
+                '编 号',
+                '机规编号',
+                '机 规 编 号'
+            ]);
+            if (labeled) return labeled;
+            const text = iframeDoc && iframeDoc.body ? (iframeDoc.body.innerText || '') : '';
+            const match = text.match(
+                /(?:机\s*规\s*编\s*号|编号|编\s*号)\s*[：:]?\s*([^\s]{2,80})/
+            );
+            return match ? match[1].trim() : '';
+        }
+
+        extractLabelValue(doc, labels) {
+            if (!doc) return '';
+            const normalizedLabels = labels.map((item) => item.replace(/\s+/g, ''));
+            const cells = Array.from(doc.querySelectorAll('td, th'));
+            for (const cell of cells) {
+                const ownText = (cell.textContent || '')
+                    .replace(/[：:]/g, '')
+                    .replace(/\s+/g, '')
+                    .trim();
+                if (!normalizedLabels.includes(ownText)) continue;
+                const next = cell.nextElementSibling;
+                if (next) {
+                    const value = (next.innerText || next.textContent || '').trim();
+                    if (value) return value;
+                }
+            }
+            return '';
+        }
+
+        inferTaskType(iframeDoc) {
+            const checkValue = this.extractLabelValue(iframeDoc, ['校核']);
+            const countersignValue = this.extractLabelValue(iframeDoc, ['会签', '项目部会签']);
+            const approveValue = this.extractLabelValue(iframeDoc, ['批准']);
+            if (!checkValue || /未校核|待校核/.test(checkValue)) return '待校核';
+            if (countersignValue && /未会签|待会签/.test(countersignValue)) return '待会签';
+            if (!approveValue || /未批准|待批准/.test(approveValue)) return '待批准';
+            return '待校核';
+        }
+
+        openCreateDialog(detail) {
+            if (!this.profile) {
+                window.alert('请先完成姓名和部门设置，再发送待办。');
+                this.openIdentityDialog(true);
+                return;
+            }
+            if (this.profile.receiveTasks === false) {
+                return;
+            }
+            const old = document.getElementById('jzt-todo-dialog-overlay');
+            if (old) old.remove();
+
+            const overlay = document.createElement('div');
+            overlay.id = 'jzt-todo-dialog-overlay';
+            overlay.style.cssText = [
+                'position:fixed',
+                'inset:0',
+                'background:rgba(15,23,42,.45)',
+                'z-index:300000',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif'
+            ].join(';');
+
+            const dialog = document.createElement('div');
+            dialog.id = 'jigui-detail-panel-todo-dialog';
+            dialog.style.cssText = [
+                'width:430px',
+                'max-width:calc(100vw - 40px)',
+                'background:#fff',
+                'border:1px solid #dbe3ef',
+                'border-radius:0',
+                'box-shadow:0 16px 40px rgba(15,23,42,.16)',
+                'overflow:hidden',
+                'box-sizing:border-box',
+                'display:flex',
+                'flex-direction:column',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif',
+                'font-size:15px',
+                'color:#334155'
+            ].join(';');
+            dialog.innerHTML = `
+                <div class="detail-header" style="background:rgb(30,80,220);color:white;height:40px;padding:0;border-radius:0;display:flex;justify-content:space-between;align-items:center;min-height:40px;box-sizing:border-box;">
+                    <span class="detail-title" style="font-weight:bold;line-height:1;display:flex;align-items:center;padding-left:0;margin-left:-8px;">📄 通知待办</span>
+                    <div style="display:flex;align-items:center;gap:0;height:100%;margin-right:-6px;">
+                        <button class="detail-close-btn" type="button" data-action="close" title="关闭" aria-label="关闭" style="width:24px;height:24px;background:none;border:none;color:white;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;margin:0;transition:background-color .2s;line-height:1;">
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
+                                <line x1="2.2" y1="2.2" x2="9.8" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                                <line x1="9.8" y1="2.2" x2="2.2" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div style="padding:14px 18px 18px;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;color:#334155;">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;color:#334155;font-size:15px;line-height:20px;white-space:nowrap;">
+                        <span style="flex:0 0 auto;"><span data-field="document-label"></span>：<strong data-field="doc-no"></strong></span>
+                    </div>
+                    <label style="display:block;margin-bottom:12px;font-size:15px;color:#334155;">
+                        <div style="display:flex;align-items:center;gap:6px;line-height:20px;white-space:nowrap;">
+                            <span style="flex:0 0 auto;">接收人：</span>
+                            <span style="flex:0 0 auto;color:#ef4444;font-size:12px;font-weight:700;">（需对方安装3.0以上版本插件）</span>
+                        </div>
+                        <div style="position:relative;margin-top:6px;">
+                            <input data-field="recipient-search" type="text" maxlength="40" autocomplete="off" placeholder="请输入姓名查询" style="display:block;width:100%;height:42px;box-sizing:border-box;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#111827;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;outline:none;">
+                            <div data-field="recipient-results" style="display:none;position:absolute;left:0;right:0;top:45px;z-index:2;max-height:180px;overflow-y:auto;border:1px solid #94a3b8;border-radius:4px;background:#fff;box-shadow:0 8px 20px rgba(15,23,42,.16);"></div>
+                        </div>
+                        <div data-field="recipient-hint" style="min-height:0;margin-top:0;color:#64748b;font-size:12px;line-height:18px;"></div>
+                    </label>
+                    <div style="display:block;margin-bottom:12px;font-size:15px;color:#334155;">
+                        待办类型：
+                        <div data-field="task-type" role="radiogroup" aria-label="待办类型" style="display:flex;align-items:center;gap:24px;width:100%;height:42px;box-sizing:border-box;margin-top:6px;padding:0 12px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;">
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
+                                <input type="radio" name="jzt-todo-task-type" value="待校核" style="width:16px;height:16px;margin:0;accent-color:#2563eb;cursor:pointer;">
+                                <span>待校核</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
+                                <input type="radio" name="jzt-todo-task-type" value="待会签" style="width:16px;height:16px;margin:0;accent-color:#2563eb;cursor:pointer;">
+                                <span>待会签</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;">
+                                <input type="radio" name="jzt-todo-task-type" value="待批准" style="width:16px;height:16px;margin:0;accent-color:#2563eb;cursor:pointer;">
+                                <span>待批准</span>
+                            </label>
+                        </div>
+                    </div>
+                    <label style="display:block;margin-bottom:0;font-size:15px;color:#334155;">
+                        备注（可选）：
+                        <textarea data-field="message" maxlength="300" rows="3" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:9px;border:1px solid #cbd5e1;border-radius:4px;resize:vertical;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;"></textarea>
+                    </label>
+                    <div data-field="status" style="min-height:18px;color:#64748b;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:13px;line-height:18px;margin-bottom:0;"></div>
+                    <div style="display:flex;justify-content:flex-end;gap:10px;">
+                        <button type="button" data-action="cancel" style="padding:8px 18px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;">取消</button>
+                        <button type="button" data-action="send" style="padding:8px 18px;border:1px solid #1d4ed8;background:#2563eb;color:#fff;border-radius:4px;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;font-weight:700;">发送待办</button>
+                    </div>
+                </div>
+            `;
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            const documentLabelElement = dialog.querySelector('[data-field="document-label"]');
+            const docNoElement = dialog.querySelector('[data-field="doc-no"]');
+            const recipientSearchInput = dialog.querySelector('[data-field="recipient-search"]');
+            const recipientResults = dialog.querySelector('[data-field="recipient-results"]');
+            const recipientHint = dialog.querySelector('[data-field="recipient-hint"]');
+            const taskTypeInputs = Array.from(
+                dialog.querySelectorAll('input[name="jzt-todo-task-type"]')
+            );
+            const messageInput = dialog.querySelector('[data-field="message"]');
+            const statusElement = dialog.querySelector('[data-field="status"]');
+            const sendButton = dialog.querySelector('[data-action="send"]');
+            let cachedUsers = [];
+            let usersLoaded = false;
+            let selectedRecipient = null;
+            documentLabelElement.textContent = detail.documentLabel || '通知单';
+            docNoElement.textContent = detail.docNo;
+            const inferredTaskType = this.inferTaskType(detail.iframeDoc);
+            taskTypeInputs.forEach((input) => {
+                input.checked = input.value === inferredTaskType;
+            });
+
+            const close = () => overlay.remove();
+            const dialogCloseButton = dialog.querySelector('[data-action="close"]');
+            dialogCloseButton.addEventListener('click', close);
+            dialogCloseButton.addEventListener('mouseenter', () => {
+                dialogCloseButton.style.backgroundColor = 'rgba(255,255,255,.15)';
+            });
+            dialogCloseButton.addEventListener('mouseleave', () => {
+                dialogCloseButton.style.backgroundColor = 'transparent';
+            });
+            dialog.querySelector('[data-action="cancel"]').addEventListener('click', close);
+
+            const getRecipientLabel = (user) => {
+                const name = String(user && user.name || '').trim();
+                const department = String(user && user.department || '').trim();
+                return name && department
+                    ? name + '（' + department + '）'
+                    : String(user && user.displayName || name || '').trim();
+            };
+
+            const hideRecipientResults = () => {
+                recipientResults.style.display = 'none';
+            };
+
+            const renderRecipientResults = () => {
+                const keyword = recipientSearchInput.value.trim().toLocaleLowerCase('zh-CN');
+                if (
+                    selectedRecipient
+                    && recipientSearchInput.value === getRecipientLabel(selectedRecipient)
+                ) {
+                    hideRecipientResults();
+                    recipientHint.textContent = '';
+                    return;
+                }
+                selectedRecipient = null;
+                recipientResults.innerHTML = '';
+                if (!keyword) {
+                    hideRecipientResults();
+                    recipientHint.textContent = '';
+                    recipientHint.style.color = '#64748b';
+                    return;
+                }
+                if (!usersLoaded) {
+                    hideRecipientResults();
+                    recipientHint.textContent = '';
+                    recipientHint.style.color = '#64748b';
+                    return;
+                }
+
+                const nameMatches = cachedUsers
+                    .filter((user) => {
+                        const searchable = [
+                            user.name,
+                            user.displayName,
+                            user.department
+                        ].join(' ').toLocaleLowerCase('zh-CN');
+                        return searchable.includes(keyword);
+                    });
+                const matches = nameMatches.sort((left, right) => {
+                        const leftExact = String(left.name || '').toLocaleLowerCase('zh-CN') === keyword;
+                        const rightExact = String(right.name || '').toLocaleLowerCase('zh-CN') === keyword;
+                        if (leftExact !== rightExact) return leftExact ? -1 : 1;
+                        return getRecipientLabel(left).localeCompare(
+                            getRecipientLabel(right),
+                            'zh-CN'
+                        );
+                    });
+
+                if (!matches.length) {
+                    hideRecipientResults();
+                    recipientHint.textContent = '未找到已安装3.0以上版本并开启待办接收的用户。';
+                    recipientHint.style.color = '#b45309';
+                    return;
+                }
+
+                matches.forEach((user) => {
+                    const resultButton = document.createElement('button');
+                    resultButton.type = 'button';
+                    resultButton.style.cssText = [
+                        'display:flex',
+                        'align-items:center',
+                        'justify-content:flex-start',
+                        'width:100%',
+                        'padding:8px 10px',
+                        'border:0',
+                        'border-bottom:1px solid #e2e8f0',
+                        'background:#fff',
+                        'color:#1f2937',
+                        'cursor:pointer',
+                        'font-family:Microsoft YaHei,微软雅黑,sans-serif',
+                        'font-size:14px',
+                        'text-align:left'
+                    ].join(';');
+
+                    const nameElement = document.createElement('span');
+                    nameElement.style.cssText = 'min-width:0;overflow:hidden;font-weight:700;text-overflow:ellipsis;white-space:nowrap;';
+                    nameElement.textContent = getRecipientLabel(user);
+
+                    resultButton.appendChild(nameElement);
+                    resultButton.addEventListener('mouseenter', () => {
+                        resultButton.style.backgroundColor = '#eff6ff';
+                    });
+                    resultButton.addEventListener('mouseleave', () => {
+                        resultButton.style.backgroundColor = '#fff';
+                    });
+                    resultButton.addEventListener('mousedown', (event) => {
+                        event.preventDefault();
+                    });
+                    resultButton.addEventListener('click', () => {
+                        selectedRecipient = user;
+                        recipientSearchInput.value = getRecipientLabel(user);
+                        hideRecipientResults();
+                        recipientHint.textContent = '';
+                    });
+                    recipientResults.appendChild(resultButton);
+                });
+                recipientResults.style.display = 'block';
+                recipientHint.textContent = '找到 ' + matches.length + ' 个可接收待办的用户，请点击选择。';
+                recipientHint.style.color = '#2563eb';
+            };
+
+            recipientSearchInput.addEventListener('input', renderRecipientResults);
+            recipientSearchInput.addEventListener('focus', renderRecipientResults);
+            recipientSearchInput.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape') hideRecipientResults();
+            });
+            dialog.addEventListener('mousedown', (event) => {
+                if (
+                    event.target !== recipientSearchInput
+                    && !recipientResults.contains(event.target)
+                ) {
+                    hideRecipientResults();
+                }
+            });
+
+            this.getCachedUserDirectory().then((users) => {
+                cachedUsers = users;
+                usersLoaded = true;
+                renderRecipientResults();
+            }).catch((error) => {
+                usersLoaded = true;
+                cachedUsers = [];
+                hideRecipientResults();
+                recipientHint.textContent = '用户缓存读取失败：' + error.message;
+                recipientHint.style.color = '#dc2626';
+            });
+
+            sendButton.addEventListener('click', () => {
+                const recipientUserId = selectedRecipient && selectedRecipient.id;
+                if (!recipientUserId) {
+                    statusElement.textContent = '请先输入姓名，并从搜索结果中选择接收人。';
+                    statusElement.style.color = '#dc2626';
+                    recipientSearchInput.focus();
+                    return;
+                }
+                const selectedTaskType = taskTypeInputs.find((input) => input.checked);
+                if (!selectedTaskType) {
+                    statusElement.textContent = '请选择待办类型。';
+                    statusElement.style.color = '#dc2626';
+                    return;
+                }
+                sendButton.disabled = true;
+                sendButton.textContent = '发送中...';
+                statusElement.textContent = '';
+                const recipientDisplayName = getRecipientLabel(selectedRecipient);
+                this.request('POST', '/tasks', {
+                    recipientUserId,
+                    docNo: detail.docNo,
+                    title: detail.title,
+                    url: detail.url,
+                    taskType: selectedTaskType.value,
+                    message: messageInput.value.trim()
+                }).then(() => {
+                    statusElement.textContent = '待办已发送给 ' + recipientDisplayName;
+                    statusElement.style.color = '#15803d';
+                    this.refreshTasks(false);
+                    window.setTimeout(close, 800);
+                }).catch((error) => {
+                    statusElement.textContent = error.message;
+                    statusElement.style.color = '#dc2626';
+                    sendButton.disabled = false;
+                    sendButton.textContent = '发送待办';
+                });
+            });
+        }
+
+        syncCompletedTasks(docNo, iframeDoc) {
+            if (
+                !docNo
+                || !this.profile
+                || this.profile.receiveTasks === false
+                || !this.tasks.length
+            ) return;
+            const checkValue = this.extractLabelValue(iframeDoc, ['校核']);
+            const countersignValue = this.extractLabelValue(iframeDoc, ['会签', '项目部会签']);
+            const approveValue = this.extractLabelValue(iframeDoc, ['批准']);
+            const isCompletedValue = (value, pendingWords) => {
+                const normalized = (value || '').trim();
+                return !!normalized && !pendingWords.some((word) => normalized.includes(word));
+            };
+            const completedTypes = new Set();
+            if (isCompletedValue(checkValue, ['未校核', '待校核'])) completedTypes.add('待校核');
+            if (isCompletedValue(countersignValue, ['未会签', '待会签'])) completedTypes.add('待会签');
+            if (isCompletedValue(approveValue, ['未批准', '待批准'])) completedTypes.add('待批准');
+            if (!completedTypes.size) return;
+
+            const matches = this.tasks.filter((task) =>
+                task.docNo === docNo && completedTypes.has(task.taskType)
+            );
+            matches.forEach((task) => {
+                this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/complete', {
+                    source: 'original-system-status'
+                }).then(() => this.refreshTasks(false)).catch((error) => {
+                    console.warn('[待办] 同步完成状态失败:', error.message);
+                });
+            });
+        }
+    }
+
     class SearchPanel {
         constructor() {
             this.isLoading = false;
@@ -457,6 +2106,7 @@
 
             // 渲染令牌：用于防止切换标签时异步请求返回覆盖新标签内容
             this.renderToken = 0;
+            this.todoManager = new TodoManager(this);
         }
 
         create() {
@@ -503,6 +2153,7 @@
                 </div>
                 <div id="jigui-panel-content" style="display: none; flex: 1; border: none; border-right: 2px solid #0066cc; border-bottom: 2px solid #0066cc; background: #fff5e6; overflow: hidden;">
                     <div id="jigui-left-column">
+                        <div id="jzt-search-section">
                         <div id="jigui-tabs" style="display: none; border-bottom: 2px solid #0066cc; background: #f5f5f5; height: 40px; align-items: center; position: relative; z-index: 10; overflow: hidden;">
                             <button class="tab-btn active" data-tab="zhiling" style="width: 240px; height: 40px; padding: 0; margin: 0; background: #6a85b0; color: white; border: none; border-right: 1px solid #909090; cursor: pointer; font-weight: 600; font-size: 18px; line-height: 1; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center;">制造令</button>
                             <button class="tab-btn" data-tab="jigui" style="width: 240px; height: 40px; padding: 0; margin: 0; background: #a3b4d0; color: white; border: none; border-right: 1px solid #909090; cursor: pointer; font-weight: 500; font-size: 16px; line-height: 1; transition: all 0.2s ease; display: flex; align-items: center; justify-content: center;">机规</button>
@@ -561,10 +2212,9 @@
                         <div style="padding: 0 20px;">
                             <input type="text" id="search-content" placeholder="" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 15px;">
                         </div>
-                        <div style="padding: 0 20px;">
+                        <div id="search-btn-wrapper" style="padding: 0 20px;">
                             <button id="search-btn" style="width: 100%; padding: 12px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 18px;">搜　索</button>
                         </div>
-                        <div style="flex: 1; min-height: 0;"></div>
                         <div id="create-jigui-btn-wrapper" style="padding: 0 20px; padding-bottom: 20px; display: none;">
                             <button id="create-jigui-btn" style="width: 100%; padding: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 18px;">创建机规</button>
                         </div>
@@ -572,6 +2222,17 @@
                             <button id="create-tongzhi-btn" style="width: 100%; padding: 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 18px;">创建通知单</button>
                         </div>
                     </div>
+                        </div>
+                        <div id="jzt-todo-panel">
+                            <div id="jzt-todo-list"></div>
+                        </div>
+                        <div id="jzt-profile-card">
+                            <div style="min-width:0;flex:1 1 auto;">
+                                <div id="jzt-todo-user">待办身份未设置</div>
+                                <div id="jzt-todo-department">请点击右侧设置</div>
+                            </div>
+                            <button id="jzt-todo-settings" type="button" title="修改姓名、部门和待办接收设置">⚙</button>
+                        </div>
                     </div>
                     <div id="search-result-area" style="flex: 1; padding: 20px; background: #fff5e6; overflow: hidden; display: flex; flex-direction: column; min-height: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">
                         <div id="maximized-minimize-only" style="position: absolute; top: 12px; right: 12px; transform: none; z-index: 100100; display: none;">
@@ -605,7 +2266,11 @@
                 minimizeBtn: panel.querySelector('#minimize-btn'),
                 maximizeBtn: panel.querySelector('#maximize-btn'),
                 maximizedMinimizeBtn: panel.querySelector('#maximized-minimize-btn'),
-                searchOptionsContainer: panel.querySelector('#search-options-container')
+                searchOptionsContainer: panel.querySelector('#search-options-container'),
+                todoList: panel.querySelector('#jzt-todo-list'),
+                todoUser: panel.querySelector('#jzt-todo-user'),
+                todoDepartment: panel.querySelector('#jzt-todo-department'),
+                todoSettings: panel.querySelector('#jzt-todo-settings')
             };
 
             // 确保面板显示
@@ -645,6 +2310,16 @@
             this.attachEventListeners();
             this.makeDraggable();
             this.initTabs();
+            this.todoManager.init();
+            if (this._els.todoSettings) {
+                this._els.todoSettings.addEventListener('click', () => {
+                    if (this.todoManager.profile) {
+                        this.todoManager.openIdentityDialog(false);
+                    } else {
+                        this.todoManager.openIdentityDialog(true);
+                    }
+                });
+            }
 
             // 默认展开且最大化显示
             if (!this.isMinimized) {
@@ -807,7 +2482,8 @@
                 totalPages: parseResult.totalPages || 1,
                 totalCount: parseResult.totalCount || rows.length,
                 pageSize: parseResult.pageSize || 0,
-                currentPage: parseResult.currentPage || 1
+                currentPage: parseResult.currentPage || 1,
+                sourceTab: parseResult.sourceTab || null
             };
         }
 
@@ -892,9 +2568,6 @@
                 if (jiguiNumber) jiguiNumber.checked = (override === 'number');
                 if (jiguiPicname) jiguiPicname.checked = (override === 'picname');
                 if (jiguiWritename) jiguiWritename.checked = (override === 'writename');
-                // 显示"创建机规"按钮
-                const createJiguiWrapper = this._els && this._els.createJiguiBtnWrapper;
-                if (createJiguiWrapper) createJiguiWrapper.style.display = 'block';
             } else if (tab === 'tongzhi') {
                 // 通知单：显示所有单选按钮
                 if (tongzhiNumber) {
@@ -917,19 +2590,24 @@
                     tongzhiWritename.parentElement.style.display = 'flex';
                     tongzhiWritename.checked = (override === 'writename');
                 }
-                // 显示"创建通知单"按钮
-                const createTongzhiWrapper = this._els && this._els.createTongzhiBtnWrapper;
-                if (createTongzhiWrapper) createTongzhiWrapper.style.display = 'block';
             }
-            // 非机规标签时隐藏"创建机规"按钮
-            if (tab !== 'jigui') {
-                const createJiguiWrapper = this._els && this._els.createJiguiBtnWrapper;
-                if (createJiguiWrapper) createJiguiWrapper.style.display = 'none';
+            this.updateCreateButtonVisibility(tab);
+        }
+
+        updateCreateButtonVisibility(tab = this.currentTab) {
+            const showCreateButtons = GM_getValue(TODO_SHOW_CREATE_BUTTONS_KEY, true) !== false;
+            const createJiguiWrapper = this._els && this._els.createJiguiBtnWrapper;
+            const createTongzhiWrapper = this._els && this._els.createTongzhiBtnWrapper;
+
+            if (createJiguiWrapper) {
+                createJiguiWrapper.style.display = showCreateButtons && tab === 'jigui'
+                    ? 'block'
+                    : 'none';
             }
-            // 非通知单标签时隐藏"创建通知单"按钮
-            if (tab !== 'tongzhi') {
-                const createTongzhiWrapper = this._els && this._els.createTongzhiBtnWrapper;
-                if (createTongzhiWrapper) createTongzhiWrapper.style.display = 'none';
+            if (createTongzhiWrapper) {
+                createTongzhiWrapper.style.display = showCreateButtons && tab === 'tongzhi'
+                    ? 'block'
+                    : 'none';
             }
         }
 
@@ -1022,9 +2700,10 @@
                     if (link) {
                         e.preventDefault();
                         e.stopPropagation();
-                        const href = link.getAttribute('data-href');
+                        const href = link.getAttribute('data-href') || link.href;
+                        const sourceTab = link.getAttribute('data-source-tab') || null;
                         const linkText = link.textContent || link.innerText || '';
-                        if (href) this.openDetailPanel(href, linkText);
+                        if (href) this.openDetailPanel(href, linkText, sourceTab);
                         return;
                     }
                     const pageLink = e.target.closest('.jigui-page-link');
@@ -1508,7 +3187,8 @@
                             totalPages: first.totalPages || 1,
                             totalCount: first.totalCount || first.rows.length,
                             currentPage: 1,
-                            pageSize: first.pageSize
+                            pageSize: first.pageSize,
+                            sourceTab: first.sourceTab || 'jigui'
                         }));
                     break;
                 case 'tongzhi': // 通知单（与其它模式一致，分页展示）
@@ -1533,54 +3213,20 @@
                 });
         }
 
-        // GBK 编码：机规系统使用 GBK/GB2312，搜索参数需与直接搜索一致
-        // 优先使用 gbk-lite（@require）对全部文字正确编码；不可用时回退
+        // GBK 编码：旧 ASP 系统使用 GBK/CP936，搜索参数必须按原始字节进行百分号编码。
+        // 使用 gbk.js 0.3.0 的完整浏览器编码表；不再使用会把部分 D8-DF 字节映射为 U+FFFD 的 gbk-lite。
         encodeGBK(str) {
             if (!str) return '';
-            if (typeof GBK !== 'undefined') {
-                try {
-                    const bytes = GBK.toBytes(GBK.fromString(str));
-                    return bytes.map(b => '%' + (b & 0xFF).toString(16).toUpperCase().padStart(2, '0')).join('');
-                } catch (e) {
-                    console.warn('encodeGBK(gbk-lite):', e);
-                }
+            if (typeof GBK === 'undefined' || typeof GBK.encode !== 'function' || typeof GBK.decode !== 'function') {
+                throw new Error('GBK 编码库加载失败，请检查 jsDelivr 网络连接');
             }
-            let result = '';
-            for (let i = 0; i < str.length; i++) {
-                const char = str.charAt(i);
-                const code = char.charCodeAt(0);
-                if (code < 0x80) {
-                    result += encodeURIComponent(char);
-                } else {
-                    const escaped = escape(char);
-                    if (escaped.startsWith('%u')) {
-                        const utf16 = parseInt(escaped.slice(2), 16);
-                        const gbkBytes = this.unicodeToGBKBytes(utf16);
-                        if (gbkBytes) {
-                            result += '%' + gbkBytes[0].toString(16).toUpperCase().padStart(2, '0') +
-                                     '%' + gbkBytes[1].toString(16).toUpperCase().padStart(2, '0');
-                        } else {
-                            result += encodeURIComponent(char);
-                        }
-                    } else {
-                        result += escaped;
-                    }
-                }
-            }
-            return result;
-        }
 
-        unicodeToGBKBytes(unicode) {
-            const commonChars = {
-                0x6C49: [0xBA, 0xBA], 0x897F: [0xCE, 0xF7],
-                0x6CB9: [0xD3, 0xCD], 0x6F06: [0xC6, 0xE1],
-            };
-            if (commonChars[unicode]) return commonChars[unicode];
-            if (unicode >= 0x4E00 && unicode <= 0x9FA5) {
-                const gbk = 0xA1A0 + (unicode - 0x4E00);
-                return [(gbk >> 8) & 0xFF, gbk & 0xFF];
+            const bytes = Array.from(GBK.encode(String(str)), b => b & 0xFF);
+            // gbk.js 对无法编码的字符会使用问号替代。往返校验可防止静默发送错误查询参数。
+            if (GBK.decode(bytes) !== String(str)) {
+                throw new Error('搜索内容包含 GBK/CP936 无法表示的字符：' + str);
             }
-            return null;
+            return bytes.map(b => '%' + b.toString(16).toUpperCase().padStart(2, '0')).join('');
         }
 
         // 通用：GET 指定 URL，gb2312 解码后返回 HTML 字符串
@@ -1664,6 +3310,7 @@
                 this.fetchUrl(url)
                     .then(html => {
                         const parseResult = this.parseResponse(html, options);
+                        parseResult.sourceTab = 'jigui';
                         if (!quiet) console.log('第 ' + pageNum + ' 页解析完成，找到 ' + parseResult.rows.length + ' 条数据');
                         resolve(parseResult);
                     })
@@ -1853,16 +3500,43 @@
             return String(cell);
         }
 
+        getModuleBaseUrl(tab) {
+            const tabUrls = {
+                'zhiling': 'http://10.16.88.34/zzl/',
+                'jigui': 'http://10.16.88.34/jigui/',
+                'tongzhi': 'http://10.16.88.34/notice/'
+            };
+            return tabUrls[tab] || 'http://10.16.88.34/';
+        }
+
+        // 相对链接必须以“结果来源模块”为基准解析，不能使用入口页面或点击瞬间的 currentTab。
+        resolveModuleUrl(href, sourceTab, fallbackUrl) {
+            if (!href) return '';
+            try {
+                const url = new URL(String(href), fallbackUrl || this.getModuleBaseUrl(sourceTab));
+                if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.hostname !== '10.16.88.34') {
+                    return '';
+                }
+                return url.href;
+            } catch (e) {
+                console.warn('无法解析链接:', href, e);
+                return '';
+            }
+        }
+
         displayResults(parseResult, searchType, searchContent) {
             const resultDiv = this._els.searchResult;
             if (!resultDiv) return;
+            const sourceTab = parseResult.sourceTab || this.currentTab;
+            // 异步搜索返回时如果用户已切换模块，不用旧模块结果覆盖当前界面。
+            if (parseResult.sourceTab && sourceTab !== this.currentTab) return;
             let results = parseResult.rows;
             const headers = parseResult.headers;
             let totalPages = parseResult.totalPages || 1;
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
- 
+
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -1921,7 +3595,7 @@
 
             let numberColumnIndex = -1;
             let userColumnIndex = -1;
-            if (this.currentTab === 'zhiling' && headers.length > 0) {
+            if (sourceTab === 'zhiling' && headers.length > 0) {
                 headers.forEach((h, idx) => {
                     const headerText = h.trim().replace(/\s+/g, '');
                     if (headerText === '编号' || headerText.includes('编号')) numberColumnIndex = idx;
@@ -1938,7 +3612,7 @@
                     const tdOpen = '<td style="padding: 6px 8px; ' + alignStyle + ' border: 1px solid #999; white-space: nowrap; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
                     if (typeof cell === 'object' && cell.type === 'link') {
                         let href = cell.href;
-                        if (this.currentTab === 'zhiling') {
+                        if (sourceTab === 'zhiling') {
                             if (userColumnIndex >= 0 && i === userColumnIndex && numberColumnIndex >= 0 && numberColumnIndex < row.length) {
                                 const numberValue = this.cellText(row[numberColumnIndex]);
                                 if (numberValue && numberValue.trim()) {
@@ -1952,15 +3626,16 @@
                             }
                         }
                         const linkText = cell.text;
-                        const isJiguiOrTongzhiLink = this.currentTab === 'jigui' || this.currentTab === 'tongzhi';
+                        const isJiguiOrTongzhiLink = sourceTab === 'jigui' || sourceTab === 'tongzhi';
                         const isRedStatusLink = isJiguiOrTongzhiLink && (String(linkText).trim() === '未校核' || String(linkText).trim() === '未批准' || String(linkText).trim() === '未分发');
                         const linkStyle = isRedStatusLink ? 'color: red !important; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;' : 'color: #0066cc; text-decoration: underline; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;';
                         const linkClass = 'jigui-detail-link';
-                        const safeHref = href ? href : '#';
-                        cellParts.push(tdOpen + '<a href="' + safeHref + '" data-href="' + href + '" class="' + linkClass + '" style="' + linkStyle + '">' + linkText + '</a></td>');
+                        const absoluteHref = this.resolveModuleUrl(href, sourceTab);
+                        const safeHref = absoluteHref || '#';
+                        cellParts.push(tdOpen + '<a href="' + safeHref + '" data-href="' + absoluteHref + '" data-source-tab="' + sourceTab + '" class="' + linkClass + '" style="' + linkStyle + '">' + linkText + '</a></td>');
                     } else {
                         const cellStr = String(cell);
-                        const isJiguiOrTongzhi = this.currentTab === 'jigui' || this.currentTab === 'tongzhi';
+                        const isJiguiOrTongzhi = sourceTab === 'jigui' || sourceTab === 'tongzhi';
                         const isRedStatus = isJiguiOrTongzhi && (cellStr.trim() === '未校核' || cellStr.trim() === '未批准' || cellStr.trim() === '未分发');
                         const cellContent = isRedStatus ? '<span style="color: red !important;">' + cellStr + '</span>' : cellStr;
                         cellParts.push(tdOpen + cellContent + '</td>');
@@ -2027,8 +3702,8 @@
             this.currentSearchType = searchType;
 
             // 每次渲染后缓存当前标签的最后结果，供切换标签时直接秒开
-            if (this.currentTab) {
-                this.tabLastViewState.set(this.currentTab, {
+            if (sourceTab) {
+                this.tabLastViewState.set(sourceTab, {
                     searchContent: searchContent || '',
                     searchType: searchType || 'default',
                     pageNum: currentPage,
@@ -2038,7 +3713,8 @@
                         totalPages: totalPages,
                         totalCount: totalCount,
                         pageSize: pageSize,
-                        currentPage: currentPage
+                        currentPage: currentPage,
+                        sourceTab: sourceTab
                     })
                 });
             }
@@ -2048,6 +3724,7 @@
         loadPage(searchContent, searchType, pageNum) {
             const resultDiv = this._els.searchResult;
             const paginationDiv = resultDiv ? resultDiv.querySelector('.jigui-pagination') : null;
+            const sourceTab = this.currentTab;
 
             if (paginationDiv) {
                 paginationDiv.style.pointerEvents = 'none';
@@ -2074,7 +3751,7 @@
                 if (countMatch) preservedTotalCount = parseInt(countMatch[1], 10);
             }
 
-            // 根据当前标签页和搜索类型选择对应的搜索函数
+            // 固定本次分页请求的来源模块，避免请求期间切换标签导致 URL 基准变化
             let searchPromise;
             if (searchType === 'default') {
                 // 默认列表：直接访问首页URL并添加page参数
@@ -2083,18 +3760,19 @@
                     'zhiling': 'http://10.16.88.34/zzl/',
                     'tongzhi': 'http://10.16.88.34/notice/'
                 };
-            const baseUrl = tabUrls[this.currentTab] || tabUrls.jigui;
+                const baseUrl = tabUrls[sourceTab] || tabUrls.jigui;
                 const url = pageNum > 1 ? baseUrl + '?page=' + pageNum : baseUrl;
                 searchPromise = this.fetchUrl(url).then(html => {
                     const parseResult = this.parseResponse(html);
                     parseResult.currentPage = pageNum;
+                    parseResult.sourceTab = sourceTab;
                     return parseResult;
                 });
-            } else if (this.currentTab === 'tongzhi') {
+            } else if (sourceTab === 'tongzhi') {
                 searchPromise = this.searchTongzhiPage(searchContent, searchType, pageNum);
-            } else if (this.currentTab === 'jigui') {
+            } else if (sourceTab === 'jigui') {
                 searchPromise = this.searchJiguiPage(searchContent, searchType, pageNum);
-            } else if (this.currentTab === 'zhiling') {
+            } else if (sourceTab === 'zhiling') {
                 searchPromise = this.searchZhilingPage(searchContent, searchType, pageNum);
             } else {
                 searchPromise = this.searchJiguiPage(searchContent, searchType, pageNum);
@@ -2102,6 +3780,7 @@
 
             searchPromise
                 .then(pageResult => {
+                    pageResult.sourceTab = pageResult.sourceTab || sourceTab;
                     if (pageResult.rows.length === 0 && pageNum > 1) {
                         console.log('第 ' + pageNum + ' 页无数据，回到第 1 页');
                         // 重新获取第1页
@@ -2112,17 +3791,18 @@
                                 'zhiling': 'http://10.16.88.34/zzl/',
                                 'tongzhi': 'http://10.16.88.34/notice/'
                             };
-                const baseUrl = tabUrls[this.currentTab] || tabUrls.jigui;
+                            const baseUrl = tabUrls[sourceTab] || tabUrls.jigui;
                             firstPagePromise = this.fetchUrl(baseUrl).then(html => {
                                 const parseResult = this.parseResponse(html);
                                 parseResult.currentPage = 1;
+                                parseResult.sourceTab = sourceTab;
                                 return parseResult;
                             });
-                        } else if (this.currentTab === 'tongzhi') {
+                        } else if (sourceTab === 'tongzhi') {
                             firstPagePromise = this.searchTongzhiPage(searchContent, searchType, 1);
-                        } else if (this.currentTab === 'jigui') {
+                        } else if (sourceTab === 'jigui') {
                             firstPagePromise = this.searchJiguiPage(searchContent, searchType, 1);
-                        } else if (this.currentTab === 'zhiling') {
+                        } else if (sourceTab === 'zhiling') {
                             firstPagePromise = this.searchZhilingPage(searchContent, searchType, 1);
                         } else {
                             firstPagePromise = this.searchJiguiPage(searchContent, searchType, 1);
@@ -2138,7 +3818,8 @@
                                 totalPages: finalTotalPages,
                                 totalCount: finalTotalCount,
                                 currentPage: 1,
-                                pageSize: p1.pageSize
+                                pageSize: p1.pageSize,
+                                sourceTab: p1.sourceTab || sourceTab
                             }, searchType, searchContent);
                         });
                     }
@@ -2152,7 +3833,8 @@
                         totalPages: finalTotalPages,
                         totalCount: finalTotalCount,
                         currentPage: pageNum,
-                        pageSize: pageResult.pageSize
+                        pageSize: pageResult.pageSize,
+                        sourceTab: pageResult.sourceTab || sourceTab
                     }, searchType, searchContent);
                 })
                 .catch(error => {
@@ -2163,7 +3845,7 @@
                 });
         }
 
-        openDetailPanel(href, titleText) {
+        openDetailPanel(href, titleText, sourceTab) {
             if (!href) {
                 return;
             }
@@ -2242,6 +3924,7 @@
                 <div class="detail-header" style="background: rgb(30, 80, 220); color: white; height: 40px; padding: 0; border-radius: 0; display: flex; justify-content: space-between; align-items: center; cursor: move; min-height: 40px; box-sizing: border-box;">
                     <span class="detail-title" style="font-weight: bold; line-height: 1; display: flex; align-items: center; padding-left: 0; margin-left: -8px;">📄 ${titleText || '详情页面'}</span>
                     <div style="display: flex; align-items: center; gap: 0; height: 100%; margin-right: -6px;">
+                        <button class="detail-todo-btn" type="button" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">通知待办</button>
                         <button class="detail-minimize-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; margin-right: 4px; transition: background-color 0.2s; line-height: 1;">
                             <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
                                 <line x1="2" y1="6" x2="10" y2="6" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
@@ -2382,7 +4065,7 @@
             // 确保弹窗可见（移除调试日志，减少控制台输出）
 
             // 加载内容
-            this.loadDetailContentById(panelId, href);
+            this.loadDetailContentById(panelId, href, sourceTab);
 
             // 将窗口置顶
             this.bringToFront(panelId);
@@ -3164,36 +4847,18 @@
             this.updateDetailButtons();
         }
 
-        loadDetailContentById(panelId, href) {
+        loadDetailContentById(panelId, href, sourceTab) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
 
             const contentIframe = panel.querySelector('.detail-content');
             if (!contentIframe) return;
 
-            // 确保URL是完整的绝对URL
-            let fullUrl = href;
-            if (href && !href.startsWith('http://') && !href.startsWith('https://')) {
-                // 如果是相对URL，根据当前标签页构建完整URL
-                if (this.currentTab === 'zhiling') {
-                    if (href.startsWith('/')) {
-                        fullUrl = 'http://10.16.88.34' + href;
-                    } else {
-                        fullUrl = 'http://10.16.88.34/zzl/' + href;
-                    }
-                } else if (this.currentTab === 'jigui') {
-                    if (href.startsWith('/')) {
-                        fullUrl = 'http://10.16.88.34' + href;
-                    } else {
-                        fullUrl = 'http://10.16.88.34/jigui/' + href;
-                    }
-                } else if (this.currentTab === 'tongzhi') {
-                    if (href.startsWith('/')) {
-                        fullUrl = 'http://10.16.88.34' + href;
-                    } else {
-                        fullUrl = 'http://10.16.88.34/notice/' + href;
-                    }
-                }
+            // 主列表传入的链接已经绝对化；这里仅以结果来源模块进行安全兜底，不再依赖可变的 currentTab。
+            const fullUrl = this.resolveModuleUrl(href, sourceTab);
+            if (!fullUrl) {
+                console.error('详情链接无效或不属于内网主机:', href);
+                return;
             }
 
             console.log('加载详情页面，URL:', fullUrl);
@@ -3217,6 +4882,9 @@
                             // 跨域情况，无法直接访问内容
                             return;
                         }
+
+                        // 通知单详情页显示“通知待办”，并根据原系统校核/批准字段同步完成状态。
+                        this.todoManager.handleDetailLoaded(panel, contentIframe, iframeDoc, fullUrl);
 
                         // 弹窗内链接统一在新弹窗中打开，不新开浏览器标签（支持多级弹窗）
                         const self = this;
@@ -3353,23 +5021,12 @@
                                     }
 
                                     if (attachmentUrl) {
-                                        // 构建完整 URL
-                                        let fullAttachmentUrl = attachmentUrl;
-                                        if (!attachmentUrl.startsWith('http://') && !attachmentUrl.startsWith('https://')) {
-                                            if (attachmentUrl.startsWith('/')) {
-                                                fullAttachmentUrl = 'http://10.16.88.34' + attachmentUrl;
-                                            } else {
-                                                // 根据当前标签页构建完整URL
-                                                if (this.currentTab === 'zhiling') {
-                                                    fullAttachmentUrl = 'http://10.16.88.34/zzl/' + attachmentUrl;
-                                                } else if (this.currentTab === 'jigui') {
-                                                    fullAttachmentUrl = 'http://10.16.88.34/jigui/' + attachmentUrl;
-                                                } else if (this.currentTab === 'tongzhi') {
-                                                    fullAttachmentUrl = 'http://10.16.88.34/notice/' + attachmentUrl;
-                                                } else {
-                                                    fullAttachmentUrl = 'http://10.16.88.34/' + attachmentUrl;
-                                                }
-                                            }
+                                        // 附件相对地址以当前详情 iframe 的实际页面为基准，避免跨模块拼错目录。
+                                        const iframeBaseUrl = contentIframe.contentWindow?.location?.href || fullUrl;
+                                        const fullAttachmentUrl = this.resolveModuleUrl(attachmentUrl, sourceTab, iframeBaseUrl);
+                                        if (!fullAttachmentUrl) {
+                                            console.error('附件链接无效或不属于内网主机:', attachmentUrl);
+                                            return;
                                         }
 
                                         console.log('获取附件列表内容，URL:', fullAttachmentUrl);
@@ -3764,6 +5421,7 @@
                 .then(html => {
                     const parseResult = this.parseResponse(html);
                     parseResult.currentPage = 1;
+                    parseResult.sourceTab = tab;
                     return parseResult;
                 });
 
@@ -3840,6 +5498,7 @@
                 ).then(html => {
                     const parseResult = this.parseResponse(html);
                     parseResult.currentPage = 1;
+                    parseResult.sourceTab = tab;
                     return parseResult;
                 });
 
@@ -3933,6 +5592,7 @@
                             const decoder = new TextDecoder('gb2312');
                             const html = decoder.decode(new Uint8Array(response.response));
                             const parseResult = this.parseResponse(html, options);
+                            parseResult.sourceTab = 'zhiling';
                             resolve(parseResult);
                         } else {
                             reject(new Error('请求失败: ' + response.status));
@@ -3991,6 +5651,7 @@
                 this.fetchUrl(url, 'http://10.16.88.34/notice/')
                     .then(html => {
                         const parseResult = this.parseResponse(html, options);
+                        parseResult.sourceTab = 'tongzhi';
                         resolve(parseResult);
                     })
                     .catch(reject);
