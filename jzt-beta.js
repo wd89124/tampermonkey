@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         制造令/机规/通知单搜索及待办工具
+// @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.49
+// @version      3.61
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -15,8 +15,8 @@
 // @grant        unsafeWindow
 // @connect      64.90.23.77
 // @require      https://cdn.jsdelivr.net/npm/gbk.js@0.3.0/dist/gbk.min.js
-// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt-3.js
-// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt-3.js
+// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
+// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
 // ==/UserScript==
 
 (function() {
@@ -76,7 +76,7 @@
             --jigui-primary-dark: #1d4ed8;
             --jigui-primary-soft: #dbeafe;
             --jigui-bg: rgb(255, 245, 230);
-            --jigui-surface: #ffffff;
+            --jigui-surface: #fff9f1;
             --jigui-border: #999;
             --jigui-text: #0f172a;
             --jigui-text-muted: #64748b;
@@ -132,7 +132,9 @@
             border-radius: 2px !important;
             transition: background-color 0.2s ease !important;
         }
-        [id^="jigui-detail-panel-"] .detail-header .detail-todo-btn {
+        [id^="jigui-detail-panel-"] .detail-header .detail-todo-btn,
+        [id^="jigui-detail-panel-"] .detail-header .detail-take-no-btn,
+        [id^="jigui-detail-panel-"] .detail-header .detail-copy-notice-btn {
             width: auto !important;
             height: 28px !important;
             padding: 0 !important;
@@ -535,7 +537,7 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.48';
+    const TODO_CLIENT_VERSION = '3.6.1';
     const TODO_DEVICE_ID_KEY = 'jzt-todo-device-id';
     const TODO_DEVICE_SECRET_KEY = 'jzt-todo-device-secret';
     const TODO_PROFILE_CACHE_KEY = 'jzt-todo-profile-cache';
@@ -582,6 +584,7 @@
             this.userDirectoryCache = directoryCache.users;
             this.userDirectoryCachedAt = directoryCache.cachedAt;
             this.userDirectoryPromise = null;
+            this.noticeCopySession = null;
             this.initialized = false;
         }
 
@@ -629,6 +632,33 @@
                 ) {
                     this.searchPanel.updateCreateButtonVisibility();
                 }
+                this.refreshCopyNoticeButtonVisibility();
+            }
+        }
+
+        isCreateAndCopyFeatureEnabled() {
+            return GM_getValue(TODO_SHOW_CREATE_BUTTONS_KEY, true) !== false;
+        }
+
+        refreshCopyNoticeButtonVisibility() {
+            const detailPanels = this.searchPanel && this.searchPanel.detailPanels;
+            if (!detailPanels || typeof detailPanels.values !== 'function') return;
+            for (const panel of detailPanels.values()) {
+                if (!panel) continue;
+                const iframe = panel.querySelector('iframe.detail-content');
+                let actualUrl = panel.dataset.todoUrl || '';
+                let iframeDoc = null;
+                if (iframe) {
+                    try {
+                        actualUrl = iframe.contentWindow.location.href
+                            || iframe.src
+                            || actualUrl;
+                        iframeDoc = iframe.contentDocument;
+                    } catch (error) {
+                        actualUrl = iframe.src || actualUrl;
+                    }
+                }
+                this.updateCopyNoticeButton(panel, actualUrl, iframeDoc);
             }
         }
 
@@ -1432,7 +1462,7 @@
                         `}
                     </div>
                 </div>
-                <div style="padding:14px 18px 18px;overflow-y:auto;background:#ffffff;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;color:#334155;">
+                <div style="padding:14px 18px 18px;overflow-y:auto;background:#fff9f1;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;color:#334155;">
                     <label style="display:block;margin-bottom:13px;font-size:15px;color:#334155;">
                         姓名
                         <input data-field="name" maxlength="30" autocomplete="off" style="display:block;width:100%;height:42px;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#111827;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;outline:none;">
@@ -1450,7 +1480,7 @@
                             是否需要接收待办
                         </span>
                         <span style="display:block;margin-top:6px;color:#64748b;font-size:12px;line-height:1.5;">
-                            勾选后，显示待办审批和通知跟踪，并接收其他人发送的待办；<br>取消勾选后，隐藏相关区域、不接受和发送待办，同时不再出现在接收人列表中。
+                            勾选后，显示待办审批和通知跟踪，并接收其他人发送的待办；取消勾选后，隐藏相关区域、停止连接待办服务器，同时不再出现在接收人列表中。
                         </span>
                     </label>
                     <label data-field="desktop-notification-label" style="display:block;margin-bottom:13px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:4px;color:#334155;cursor:pointer;">
@@ -1468,7 +1498,7 @@
                             是否显示创建机规/通知单按钮
                         </span>
                         <span style="display:block;margin-top:6px;color:#64748b;font-size:12px;line-height:1.5;">
-                            取消勾选后，仅隐藏左侧创建按钮，不影响搜索和待办功能。
+                            勾选后显示左侧创建按钮，并开启通知单和机规的复制开单功能；取消勾选后隐藏并关闭上述功能，不影响搜索和待办功能。
                         </span>
                     </label>
                     <div data-field="status" style="min-height:20px;margin-bottom:10px;color:#64748b;font-size:13px;"></div>
@@ -1591,6 +1621,9 @@
             try {
                 actualUrl = iframe.contentWindow.location.href || fallbackUrl;
             } catch (e) {}
+            this.updateTakeNoButton(panel, actualUrl);
+            this.updateCopyNoticeButton(panel, actualUrl, iframeDoc);
+            this.resumeNoticeCopySession(panel, iframeDoc, actualUrl);
             const detailModule = this.getTodoDetailModule(actualUrl);
             const button = panel.querySelector('.detail-todo-btn');
             if (!button) return;
@@ -1625,6 +1658,3347 @@
                 }
                 : null;
             this.syncCompletedTasks(docNo, iframeDoc);
+        }
+
+        updateTakeNoButton(panel, actualUrl) {
+            const takeNoButton = panel.querySelector('.detail-take-no-btn');
+            const isNoticeCreatePage =
+                /^http:\/\/10\.16\.88\.34\/notice\/createnote\.asp(?:\?|$)/i
+                    .test(actualUrl);
+            if (takeNoButton) {
+                takeNoButton.style.display = isNoticeCreatePage
+                    ? 'inline-flex'
+                    : 'none';
+                takeNoButton.onclick = isNoticeCreatePage
+                    ? (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        window.open(
+                            'https://tomato.shanghai-electric.com/pc/takeNo',
+                            '_blank',
+                            'noopener,noreferrer'
+                        );
+                    }
+                    : null;
+            }
+        }
+
+        updateCopyNoticeButton(panel, actualUrl, iframeDoc) {
+            const button = panel.querySelector('.detail-copy-notice-btn');
+            if (!button) return;
+            const detailModule = this.getTodoDetailModule(actualUrl);
+            const copyModule = this.isCreateAndCopyFeatureEnabled() && detailModule
+                && (
+                    detailModule.sourceTab === 'tongzhi'
+                    || detailModule.sourceTab === 'jigui'
+                )
+                ? detailModule.sourceTab
+                : '';
+            button.style.display = copyModule ? 'inline-flex' : 'none';
+            button.onclick = copyModule
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (copyModule === 'jigui') {
+                        const template = this.extractJiguiCopyTemplate(
+                            panel,
+                            iframeDoc,
+                            actualUrl
+                        );
+                        this.startJiguiCopy(template);
+                    } else {
+                        const template = this.extractNoticeCopyTemplate(
+                            panel,
+                            iframeDoc,
+                            actualUrl
+                        );
+                        this.startNoticeCopy(template);
+                    }
+                }
+                : null;
+        }
+
+        startNoticeCopy(template) {
+            if (!this.isCreateAndCopyFeatureEnabled()) return;
+            this.noticeCopySession = {
+                template,
+                copyModule: 'tongzhi',
+                options: {
+                    copyPart: true,
+                    copyOptions: true,
+                    copyContent: true
+                },
+                targetPanelId: '',
+                runToken: 0,
+                completed: false
+            };
+            const panelId = this.searchPanel.openDetailPanel(
+                'http://10.16.88.34/notice/createnote.asp',
+                '创建通知单',
+                'tongzhi'
+            );
+            if (panelId && this.noticeCopySession) {
+                this.noticeCopySession.targetPanelId = panelId;
+            }
+        }
+
+        startJiguiCopy(template) {
+            if (!this.isCreateAndCopyFeatureEnabled()) return;
+            this.noticeCopySession = {
+                template,
+                copyModule: 'jigui',
+                targetPanelId: '',
+                runToken: 0,
+                completed: false
+            };
+            const panelId = this.searchPanel.openDetailPanel(
+                'http://10.16.88.34/jigui/createnote.asp',
+                '创建机规',
+                'jigui'
+            );
+            if (panelId && this.noticeCopySession) {
+                this.noticeCopySession.targetPanelId = panelId;
+            }
+        }
+
+        normalizeCopyText(value) {
+            return String(value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/[：:]/g, '')
+                .replace(/\s+/g, '')
+                .trim();
+        }
+
+        isCopyLabeledCellText(value) {
+            const raw = String(value || '').replace(/\u00a0/g, ' ').trim();
+            const separator = raw.search(/[：:]/);
+            if (separator < 1 || separator > 40) return false;
+            const label = this.normalizeCopyText(raw.slice(0, separator));
+            const knownLabels = [
+                '通知单类型', '通知类型', '通知单类别', '通知类别',
+                '类别细分', '分类细分', '原因', '备注',
+                '服务订单工号', '服务需求单/流程编号',
+                '服务需求单流程编号', '外部NCR编号',
+                '与其他通知单是否关联', '其他通知单编号',
+                '关联通知单编号', '是否依托产品验证',
+                '依托产品验证工号', '产品类型', '产品名称', '工号',
+                '部件名称', '部件图号', '部件类属',
+                '是否与SAP相关', '是否与发运相关',
+                '是否需会签', '是否需要会签', '会签部门',
+                '附页', '附件', '是否有新物料号', '有无新物料号',
+                '新物料供方信息', '通知内容',
+                '是否需要布置物料', '是否需布置物料',
+                '是否发生成本变更', '是否有成本变更',
+                '是否需要维护工时', '工时信息', '执行信息',
+                '物料信息', '新增物料', '取消物料'
+            ].map((item) => this.normalizeCopyText(item));
+            return knownLabels.includes(label);
+        }
+
+        extractNoticeCopyField(doc, aliases) {
+            if (!doc) return '';
+            const normalizedAliases = aliases.map((item) =>
+                this.normalizeCopyText(item)
+            );
+            const boundaryLabels = [
+                '通知单类别', '通知类别', '类别细分', '分类细分',
+                '与其他通知单是否关联', '其他通知单编号',
+                '关联通知单编号', '是否依托产品验证',
+                '依托产品验证工号', '产品类型', '产品名称',
+                '工号', '部件名称', '部件图号', '部件类属',
+                '是否与SAP相关', '是否与发运相关', '是否需会签',
+                '是否需要会签', '附页', '附件', '是否有新物料号',
+                '是否需要布置物料', '是否需布置物料',
+                '是否发生成本变更', '是否有成本变更', '通知内容'
+            ].map((item) => this.normalizeCopyText(item));
+            const cells = Array.from(doc.querySelectorAll('td, th, label'));
+            const matches = [];
+            cells.forEach((cell) => {
+                const clone = cell.cloneNode(true);
+                clone.querySelectorAll(
+                    'input,select,textarea,button,script,style,table'
+                ).forEach((node) => node.remove());
+                const text = (clone.innerText || clone.textContent || '').trim();
+                const normalized = this.normalizeCopyText(text);
+                const alias = normalizedAliases.find((item) =>
+                    normalized.startsWith(item)
+                );
+                if (alias) matches.push({ cell, normalized, alias, text });
+            });
+            matches.sort((left, right) =>
+                left.normalized.length - right.normalized.length
+            );
+            for (const match of matches) {
+                let remainder = match.normalized.slice(match.alias.length);
+                if (remainder) {
+                    const boundaryIndex = boundaryLabels
+                        .filter((label) => !normalizedAliases.includes(label))
+                        .map((label) => remainder.indexOf(label))
+                        .filter((index) => index >= 0)
+                        .sort((left, right) => left - right)[0];
+                    if (Number.isInteger(boundaryIndex)) {
+                        if (boundaryIndex === 0) return '';
+                        remainder = remainder.slice(0, boundaryIndex);
+                    } else {
+                        const sourceAlias = aliases[
+                            normalizedAliases.indexOf(match.alias)
+                        ] || aliases[0];
+                        const aliasPattern = sourceAlias
+                            .split('')
+                            .map((char) =>
+                                char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                            )
+                            .join('\\s*');
+                        const rawRemainder = match.text.replace(
+                            new RegExp(
+                                '^\\s*' + aliasPattern + '\\s*[：:]?\\s*'
+                            ),
+                            ''
+                        ).trim();
+                        if (rawRemainder) return rawRemainder;
+                    }
+                    if (remainder) return remainder;
+                }
+                const cell = match.cell;
+                const next = cell.nextElementSibling;
+                if (next) {
+                    const value = this.getElementOwnText(next).trim();
+                    if (this.isCopyLabeledCellText(value)) return '';
+                    if (value) return value;
+                }
+            }
+            const bodyText = doc.body
+                ? String(doc.body.innerText || doc.body.textContent || '')
+                : '';
+            for (const alias of aliases) {
+                const aliasPattern = alias
+                    .split('')
+                    .map((char) =>
+                        char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                    )
+                    .join('\\s*');
+                const fallbackMatch = bodyText.match(
+                    new RegExp(
+                        aliasPattern
+                        + '\\s*[：:]\\s*([^\\t\\r\\n]{1,500})'
+                    )
+                );
+                if (fallbackMatch && fallbackMatch[1].trim()) {
+                    return fallbackMatch[1].trim();
+                }
+            }
+            return '';
+        }
+
+        extractRightAdjacentCellValue(doc, aliases) {
+            if (!doc) return '';
+            const wanted = aliases.map((alias) =>
+                this.normalizeCopyText(alias)
+            );
+            const labelCells = Array.from(
+                doc.querySelectorAll('td,th')
+            ).filter((cell) => {
+                if (cell.querySelector('td,th')) return false;
+                const normalized = this.normalizeCopyText(
+                    this.getElementOwnText(cell)
+                ).replace(/^[|｜丨¦\\]+/, '');
+                return wanted.includes(normalized);
+            });
+            labelCells.sort((left, right) =>
+                this.getElementOwnText(left).length
+                - this.getElementOwnText(right).length
+            );
+            for (const labelCell of labelCells) {
+                const rightCell = labelCell.nextElementSibling;
+                if (!rightCell || !rightCell.matches('td,th')) continue;
+                const value = String(
+                    rightCell.innerText
+                    || this.getElementOwnText(rightCell)
+                    || ''
+                )
+                    .replace(/\r\n?/g, '\n')
+                    .trim();
+                if (value) return value;
+            }
+            return '';
+        }
+
+        extractCompleteLabeledCellValue(doc, aliases) {
+            if (!doc) return '';
+            const cells = Array.from(
+                doc.querySelectorAll('td,th,label')
+            ).filter((cell) => !cell.querySelector('td,th'));
+            for (const alias of aliases) {
+                const aliasPattern = alias
+                    .split('')
+                    .map((char) =>
+                        char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                    )
+                    .join('[\\s\\u00a0\\u3000]*');
+                const inlinePattern = new RegExp(
+                    '^[\\s\\u00a0\\u3000|｜丨¦\\\\]*'
+                    + aliasPattern
+                    + '[\\s\\u00a0\\u3000]*[：:]'
+                    + '[\\s\\u00a0\\u3000]*([\\s\\S]*)$'
+                );
+                const inlineCandidates = cells
+                    .map((cell) => ({
+                        cell,
+                        raw: this.getElementOwnText(cell)
+                    }))
+                    .filter((item) => inlinePattern.test(item.raw))
+                    .sort((left, right) =>
+                        left.raw.length - right.raw.length
+                    );
+                for (const candidate of inlineCandidates) {
+                    const match = candidate.raw.match(inlinePattern);
+                    const value = match ? String(match[1] || '').trim() : '';
+                    if (value) return value;
+                }
+            }
+            return this.extractRightAdjacentCellValue(doc, aliases);
+        }
+
+        extractStrictLabeledCellValue(doc, aliases) {
+            if (!doc) return '';
+            const wanted = aliases.map((alias) =>
+                this.normalizeCopyText(alias)
+            );
+            const boundaryLabels = [
+                '通知单类别', '通知类别', '类别细分', '分类细分',
+                '服务订单工号', '服务需求单/流程编号', '外部NCR编号',
+                '与其他通知单是否关联', '其他通知单编号',
+                '是否依托产品验证', '依托产品验证工号',
+                '产品类型', '产品名称', '工号', '部件名称',
+                '部件图号', '部件类属', '附页', '附件',
+                '是否有新物料号', '有无新物料号',
+                '是否与SAP相关', '是否与发运相关',
+                '是否需会签', '是否需要会签', '会签部门',
+                '通知内容', '是否需要布置物料', '是否需布置物料',
+                '物料信息', '新增物料', '取消物料'
+            ].map((label) => this.normalizeCopyText(label));
+            const beginsWithAnotherField = (value) => {
+                const normalized = this.normalizeCopyText(value)
+                    .replace(/^[|｜丨¦\\]+/, '');
+                if (!normalized) return false;
+                return boundaryLabels.some((label) =>
+                    !wanted.includes(label)
+                    && (
+                        normalized === label
+                        || normalized.startsWith(label)
+                    )
+                );
+            };
+            const candidates = [];
+            Array.from(doc.querySelectorAll('td,th,label')).forEach((cell) => {
+                if (cell.querySelector('td,th')) return;
+                const raw = this.getElementOwnText(cell).trim();
+                if (!raw) return;
+                const separator = raw.search(/[：:]/);
+                const rawLabel = separator >= 0
+                    ? raw.slice(0, separator)
+                    : raw;
+                const normalizedLabel = this.normalizeCopyText(rawLabel);
+                if (!wanted.includes(normalizedLabel)) return;
+                candidates.push({
+                    cell,
+                    raw,
+                    separator,
+                    normalizedLabel
+                });
+            });
+            candidates.sort((left, right) =>
+                left.raw.length - right.raw.length
+            );
+            for (const candidate of candidates) {
+                if (candidate.separator >= 0) {
+                    const inlineValue = candidate.raw
+                        .slice(candidate.separator + 1)
+                        .trim();
+                    if (inlineValue) {
+                        return beginsWithAnotherField(inlineValue)
+                            ? ''
+                            : inlineValue;
+                    }
+                }
+                const next = candidate.cell.nextElementSibling;
+                if (next) {
+                    const nextValue = this.getElementOwnText(next).trim();
+                    if (this.isCopyLabeledCellText(nextValue)) return '';
+                    if (beginsWithAnotherField(nextValue)) return '';
+                    if (nextValue) return nextValue;
+                }
+            }
+            const bodyText = doc.body
+                ? String(doc.body.innerText || doc.body.textContent || '')
+                : '';
+            for (const alias of aliases) {
+                const aliasPattern = alias
+                    .split('')
+                    .map((char) =>
+                        char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                    )
+                    .join('[\\s\\u00a0\\u3000]*');
+                const fallbackMatch = bodyText.match(
+                    new RegExp(
+                        '(^|[^\\u3400-\\u9fffA-Za-z0-9])'
+                        + '[ \\u00a0\\u3000]*'
+                        + aliasPattern
+                        + '[\\s\\u00a0\\u3000]*[：:]'
+                        + '[\\s\\u00a0\\u3000]*'
+                        + '([A-Za-z0-9][A-Za-z0-9._\\-/,，、]*)'
+                    )
+                );
+                if (fallbackMatch && fallbackMatch[2]) {
+                    return fallbackMatch[2].trim();
+                }
+            }
+            return '';
+        }
+
+        extractNoticeType(doc) {
+            const labeled = this.extractNoticeCopyField(doc, [
+                '通知单类型',
+                '通知类型'
+            ]);
+            if (labeled) return labeled.replace(/通知单$/, '').trim();
+            if (!doc) return '';
+            const candidates = Array.from(
+                doc.querySelectorAll('h1,h2,h3,font,b,td')
+            );
+            for (const element of candidates) {
+                const text = (element.innerText || element.textContent || '')
+                    .replace(/\s+/g, '')
+                    .trim();
+                if (
+                    text.length >= 4
+                    && text.length <= 24
+                    && /通知单$/.test(text)
+                    && !/通知内容|其他通知单/.test(text)
+                ) {
+                    return text.replace(/通知单$/, '');
+                }
+            }
+            return '';
+        }
+
+        getChoiceSideText(input, direction) {
+            if (!input) return '';
+            let node = direction === 'previous'
+                ? input.previousSibling
+                : input.nextSibling;
+            let inspected = 0;
+            while (node && inspected < 3) {
+                inspected += 1;
+                if (
+                    node.nodeType === Node.ELEMENT_NODE
+                    && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/i.test(node.tagName)
+                ) break;
+                const text = node.nodeType === Node.TEXT_NODE
+                    ? node.textContent
+                    : node.textContent;
+                if (String(text || '').trim()) return String(text).trim();
+                node = direction === 'previous'
+                    ? node.previousSibling
+                    : node.nextSibling;
+            }
+            return '';
+        }
+
+        getChoiceCaptions(doc, input) {
+            if (!input) return [];
+            const captions = [];
+            const add = (value) => {
+                const normalized = this.normalizeCopyText(value);
+                if (normalized && !captions.includes(normalized)) {
+                    captions.push(normalized);
+                }
+            };
+            if (input.id) {
+                const label = doc.querySelector(
+                    'label[for="' + CSS.escape(input.id) + '"]'
+                );
+                if (label) add(label.innerText || label.textContent);
+            }
+            const wrappingLabel = input.closest('label');
+            if (wrappingLabel) add(
+                    wrappingLabel.innerText
+                    || wrappingLabel.textContent
+                    || ''
+            );
+            add(this.getChoiceSideText(input, 'previous'));
+            add(this.getChoiceSideText(input, 'next'));
+            if (
+                input.parentElement
+                && input.parentElement.querySelectorAll(
+                    'input[type="radio"],input[type="checkbox"]'
+                ).length === 1
+            ) {
+                add(
+                    input.parentElement.innerText
+                    || input.parentElement.textContent
+                    || ''
+                );
+            }
+            const containingCell = input.closest('td,th');
+            if (
+                containingCell
+                && containingCell.querySelectorAll(
+                    'input[type="radio"],input[type="checkbox"]'
+                ).length === 1
+            ) {
+                add(this.getElementOwnText(containingCell));
+            }
+            return captions;
+        }
+
+        getCheckboxCaption(doc, input) {
+            const captions = this.getChoiceCaptions(doc, input);
+            const previous = this.normalizeCopyText(
+                this.getChoiceSideText(input, 'previous')
+            );
+            if (previous && previous.length <= 30) return previous;
+            return captions.find((text) => text.length <= 30) || '';
+        }
+
+        getRadioChoiceCaption(doc, input) {
+            const previous = this.normalizeCopyText(
+                this.getChoiceSideText(input, 'previous')
+            );
+            const previousChoice = previous.match(/(是|否|有|无)$/);
+            if (previousChoice) return previousChoice[1];
+            const next = this.normalizeCopyText(
+                this.getChoiceSideText(input, 'next')
+            );
+            const nextChoice = next.match(/^(是|否|有|无)/);
+            if (nextChoice) return nextChoice[1];
+            const captions = this.getChoiceCaptions(doc, input);
+            const exact = captions.find((text) => /^(是|否|有|无)$/.test(text));
+            return exact || this.normalizeCopyText(input.value);
+        }
+
+        getDirectCopyTableRows(table) {
+            if (!table || !table.rows) return [];
+            return Array.from(table.rows).filter(
+                (row) => row.closest('table') === table
+            );
+        }
+
+        buildCopyTableGrid(table) {
+            const rows = this.getDirectCopyTableRows(table);
+            const grid = [];
+            rows.forEach((row, rowIndex) => {
+                if (!grid[rowIndex]) grid[rowIndex] = [];
+                let columnIndex = 0;
+                Array.from(row.cells || []).forEach((cell) => {
+                    while (grid[rowIndex][columnIndex]) columnIndex += 1;
+                    const rowSpan = Math.max(
+                        1,
+                        Number.parseInt(cell.getAttribute('rowspan') || '1', 10)
+                    );
+                    const columnSpan = Math.max(
+                        1,
+                        Number.parseInt(cell.getAttribute('colspan') || '1', 10)
+                    );
+                    for (
+                        let rowOffset = 0;
+                        rowOffset < rowSpan;
+                        rowOffset += 1
+                    ) {
+                        const targetRow = rowIndex + rowOffset;
+                        if (!grid[targetRow]) grid[targetRow] = [];
+                        for (
+                            let columnOffset = 0;
+                            columnOffset < columnSpan;
+                            columnOffset += 1
+                        ) {
+                            grid[targetRow][columnIndex + columnOffset] = cell;
+                        }
+                    }
+                    columnIndex += columnSpan;
+                });
+            });
+            return { table, rows, grid };
+        }
+
+        getMaterialColumnKey(text) {
+            const normalized = this.normalizeCopyText(text)
+                .replace(/[()（）]/g, '');
+            if (!normalized) return '';
+            if (normalized === '新增物料') return 'addSection';
+            if (normalized === '取消物料') return 'cancelSection';
+            if (/追加成本/.test(normalized)) return 'addedCost';
+            if (/要求完工时间|要求完成时间/.test(normalized)) {
+                return 'completionTime';
+            }
+            if (/工艺路线/.test(normalized)) return 'processRoute';
+            if (
+                normalized === '新物料'
+                || /新物料.*(?:打钩|勾选|选择)/.test(normalized)
+            ) return 'isNewMaterial';
+            if (/物料描述/.test(normalized)) return 'description';
+            if (/物料号/.test(normalized)) return 'materialNo';
+            if (/图号/.test(normalized)) return 'drawingNo';
+            if (/数量/.test(normalized)) return 'quantity';
+            if (/单位/.test(normalized)) return 'unit';
+            if (/备注/.test(normalized)) return 'remark';
+            if (/层级/.test(normalized)) return 'level';
+            if (/单价/.test(normalized)) return 'unitPrice';
+            return '';
+        }
+
+        getMaterialSectionHint(table, columns) {
+            if (columns.addSection != null) return 'add';
+            if (columns.cancelSection != null) return 'cancel';
+            const enclosingCell = table ? table.closest('td,th') : null;
+            let sibling = enclosingCell
+                ? enclosingCell.previousElementSibling
+                : null;
+            for (let distance = 0; sibling && distance < 3; distance += 1) {
+                const text = this.normalizeCopyText(
+                    this.getElementOwnText(sibling)
+                );
+                if (text === '新增物料') return 'add';
+                if (text === '取消物料') return 'cancel';
+                sibling = sibling.previousElementSibling;
+            }
+            return '';
+        }
+
+        findMaterialTableModel(doc, sectionType = 'add') {
+            if (!doc) return null;
+            const candidates = [];
+            Array.from(doc.querySelectorAll('table')).forEach((table) => {
+                const model = this.buildCopyTableGrid(table);
+                model.grid.forEach((cells, rowIndex) => {
+                    const columns = {};
+                    const seenCells = new Set();
+                    (cells || []).forEach((cell, columnIndex) => {
+                        if (!cell || seenCells.has(cell)) return;
+                        seenCells.add(cell);
+                        const key = this.getMaterialColumnKey(
+                            this.getElementOwnText(cell)
+                        );
+                        if (key && columns[key] == null) {
+                            columns[key] = columnIndex;
+                        }
+                    });
+                    const keys = Object.keys(columns);
+                    const required = (
+                        columns.materialNo != null
+                        && columns.description != null
+                        && (
+                            columns.quantity != null
+                            || columns.drawingNo != null
+                        )
+                    );
+                    if (!required) return;
+                    candidates.push({
+                        ...model,
+                        headerRowIndex: rowIndex,
+                        columns,
+                        sectionType: this.getMaterialSectionHint(
+                            table,
+                            columns
+                        ),
+                        score: keys.length
+                    });
+                });
+            });
+            candidates.sort((left, right) =>
+                right.score - left.score
+                || left.table.querySelectorAll('table').length
+                    - right.table.querySelectorAll('table').length
+            );
+            const sectionMatch = candidates.find(
+                (candidate) => candidate.sectionType === sectionType
+            );
+            if (sectionMatch) return sectionMatch;
+            if (sectionType === 'cancel') return null;
+            return candidates.find(
+                (candidate) => candidate.sectionType !== 'cancel'
+            ) || null;
+        }
+
+        getMaterialCellText(cell) {
+            if (!cell) return '';
+            const control = cell.querySelector(
+                'input:not([type]),input[type="text"],textarea,select'
+            );
+            if (control) {
+                if (control.tagName === 'SELECT') {
+                    const option = control.options
+                        ? control.options[control.selectedIndex]
+                        : null;
+                    return String(
+                        option ? option.textContent : control.value || ''
+                    ).trim();
+                }
+                return String(control.value || '').trim();
+            }
+            return this.getElementOwnText(cell).trim();
+        }
+
+        extractSourceMaterialRows(doc, sectionType = 'add') {
+            const model = this.findMaterialTableModel(doc, sectionType);
+            if (!model) return [];
+            const materialKeys = [
+                'level',
+                'materialNo',
+                'drawingNo',
+                'description',
+                'quantity',
+                'unit',
+                'remark',
+                'isNewMaterial',
+                'processRoute',
+                'completionTime',
+                'unitPrice',
+                'addedCost'
+            ];
+            const results = [];
+            for (
+                let rowIndex = model.headerRowIndex + 1;
+                rowIndex < model.rows.length;
+                rowIndex += 1
+            ) {
+                const row = model.rows[rowIndex];
+                const rowText = this.normalizeCopyText(
+                    this.getElementOwnText(row)
+                );
+                if (
+                    sectionType === 'add'
+                    && /取消物料/.test(rowText)
+                ) break;
+                const item = {};
+                materialKeys.forEach((key) => {
+                    const columnIndex = model.columns[key];
+                    if (columnIndex == null) {
+                        item[key] = key === 'isNewMaterial' ? false : '';
+                        return;
+                    }
+                    const cell = model.grid[rowIndex]
+                        ? model.grid[rowIndex][columnIndex]
+                        : null;
+                    if (key === 'isNewMaterial') {
+                        const checkbox = cell
+                            ? cell.querySelector('input[type="checkbox"]')
+                            : null;
+                        item[key] = checkbox
+                            ? checkbox.checked
+                            : (
+                                /[√✓✔]/.test(this.getMaterialCellText(cell))
+                                || this.getCopyPolarity(
+                                    this.getMaterialCellText(cell)
+                                ) === 'positive'
+                            );
+                        return;
+                    }
+                    item[key] = this.getMaterialCellText(cell);
+                });
+                const hasContent = [
+                    item.level,
+                    item.materialNo,
+                    item.drawingNo,
+                    item.description,
+                    item.quantity,
+                    item.unit,
+                    item.remark,
+                    item.processRoute,
+                    item.completionTime,
+                    item.unitPrice,
+                    item.addedCost
+                ].some((value) => String(value || '').trim());
+                if (hasContent) results.push(item);
+            }
+            return results;
+        }
+
+        findDistributionTableModel(doc) {
+            if (!doc) return null;
+            const candidates = [];
+            Array.from(doc.querySelectorAll('table')).forEach((table) => {
+                const model = this.buildCopyTableGrid(table);
+                model.grid.forEach((cells, rowIndex) => {
+                    const headerByColumn = {};
+                    const seenCells = new Set();
+                    (cells || []).forEach((cell, columnIndex) => {
+                        if (!cell || seenCells.has(cell)) return;
+                        seenCells.add(cell);
+                        const label = this.normalizeCopyText(
+                            this.getElementOwnText(cell)
+                        );
+                        if (
+                            label
+                            && label.length <= 30
+                            && headerByColumn[columnIndex] == null
+                        ) headerByColumn[columnIndex] = label;
+                    });
+                    const labels = Object.values(headerByColumn);
+                    if (
+                        !labels.includes('发送部门')
+                        || labels.length < 6
+                    ) return;
+                    candidates.push({
+                        ...model,
+                        headerRowIndex: rowIndex,
+                        headerByColumn,
+                        score: labels.length
+                    });
+                });
+            });
+            candidates.sort((left, right) =>
+                right.score - left.score
+                || left.table.querySelectorAll('table').length
+                    - right.table.querySelectorAll('table').length
+            );
+            return candidates[0] || null;
+        }
+
+        extractSourceDistributionDepartments(doc) {
+            const model = this.findDistributionTableModel(doc);
+            if (!model) return [];
+            const selected = [];
+            for (
+                let rowIndex = model.headerRowIndex + 1;
+                rowIndex < Math.min(
+                    model.rows.length,
+                    model.headerRowIndex + 5
+                );
+                rowIndex += 1
+            ) {
+                const cells = model.grid[rowIndex] || [];
+                Object.entries(model.headerByColumn).forEach(
+                    ([columnText, label]) => {
+                        if (label === '发送部门') return;
+                        const columnIndex = Number(columnText);
+                        const cell = cells[columnIndex];
+                        if (!cell) return;
+                        const checkbox = cell.querySelector(
+                            'input[type="checkbox"]'
+                        );
+                        const text = this.getElementOwnText(cell);
+                        if (
+                            (checkbox && checkbox.checked)
+                            || /[●•∙·]/.test(text)
+                        ) {
+                            if (!selected.includes(label)) selected.push(label);
+                        }
+                    }
+                );
+                if (selected.length) break;
+            }
+            return selected;
+        }
+
+        extractNoticeCopyTemplate(panel, iframeDoc, actualUrl) {
+            const read = (aliases) =>
+                this.extractNoticeCopyField(iframeDoc, aliases);
+            const checkboxLabels = Array.from(
+                iframeDoc.querySelectorAll('input[type="checkbox"]:checked')
+            )
+                .map((input) => this.getCheckboxCaption(iframeDoc, input))
+                .map((text) => this.normalizeCopyText(text))
+                .filter((text) => text && text.length <= 30);
+            return {
+                sourceDocNo: this.extractDocNo(panel, iframeDoc),
+                sourceUrl: actualUrl,
+                noticeType: this.extractNoticeType(iframeDoc),
+                fields: {
+                    noticeCategory: read(['通知单类别', '通知类别']),
+                    categoryDetail: read(['类别细分', '分类细分']),
+                    serviceOrderJobNo:
+                        this.extractStrictLabeledCellValue(
+                            iframeDoc,
+                            ['服务订单工号']
+                        ),
+                    serviceRequestNo:
+                        this.extractStrictLabeledCellValue(
+                            iframeDoc,
+                            [
+                                '服务需求单/流程编号',
+                                '服务需求单流程编号'
+                            ]
+                        ),
+                    externalNcrNo:
+                        this.extractStrictLabeledCellValue(
+                            iframeDoc,
+                            ['外部NCR编号']
+                        ),
+                    productType: this.extractStrictLabeledCellValue(
+                        iframeDoc,
+                        ['产品类型']
+                    ),
+                    productName: read(['产品名称']),
+                    workNo: this.extractStrictLabeledCellValue(
+                        iframeDoc,
+                        ['工号']
+                    ),
+                    partClass: read(['部件类属']),
+                    dependentProduct: read(['是否依托产品验证']),
+                    dependentProductJobNo: read(['依托产品验证工号']),
+                    relatedNotice: read([
+                        '其他通知单编号',
+                        '关联通知单编号',
+                        '与其他通知单编号'
+                    ]),
+                    partName: read(['部件名称']),
+                    partDrawingNo: this.extractStrictLabeledCellValue(
+                        iframeDoc,
+                        ['部件图号']
+                    ),
+                    related: read(['与其他通知单是否关联']),
+                    sapRelated: read(['是否与SAP相关', '与SAP相关']),
+                    shippingRelated: read(['是否与发运相关', '与发运相关']),
+                    needCountersign: read(['是否需会签', '是否需要会签']),
+                    attachment: read(['附页', '附件']),
+                    hasNewMaterial: read(['是否有新物料号', '有无新物料号']),
+                    needMaterial: read([
+                        '是否需要布置物料',
+                        '是否需布置物料'
+                    ]),
+                    costChange: read([
+                        '是否发生成本变更',
+                        '是否有成本变更'
+                    ]),
+                    noticeContent: this.extractRightAdjacentCellValue(
+                        iframeDoc,
+                        ['通知内容']
+                    )
+                },
+                checkboxLabels: Array.from(new Set(checkboxLabels)),
+                countersignDepartments: this.extractSourceCheckboxGroup(
+                    iframeDoc,
+                    ['会签部门']
+                ),
+                materialRows: this.extractSourceMaterialRows(
+                    iframeDoc,
+                    'add'
+                ),
+                cancelMaterialRows: this.extractSourceMaterialRows(
+                    iframeDoc,
+                    'cancel'
+                ),
+                distributionDepartments:
+                    this.extractSourceDistributionDepartments(iframeDoc),
+                genericFields: this.collectSourceCopyFields(iframeDoc)
+            };
+        }
+
+        getJiguiRelationColumnKey(value) {
+            const normalized = this.normalizeCopyText(value);
+            if (normalized === '名称') return 'name';
+            if (normalized === '图号') return 'drawingNo';
+            if (normalized === '数量') return 'quantity';
+            return '';
+        }
+
+        findJiguiRelationTableModel(doc, requireEditable = false) {
+            if (!doc) return null;
+            const candidates = [];
+            Array.from(doc.querySelectorAll('table')).forEach((table) => {
+                const model = this.buildCopyTableGrid(table);
+                model.grid.forEach((cells, rowIndex) => {
+                    const columns = {};
+                    const seenCells = new Set();
+                    (cells || []).forEach((cell, columnIndex) => {
+                        if (!cell || seenCells.has(cell)) return;
+                        seenCells.add(cell);
+                        const key = this.getJiguiRelationColumnKey(
+                            this.getElementOwnText(cell)
+                        );
+                        if (key && columns[key] == null) {
+                            columns[key] = columnIndex;
+                        }
+                    });
+                    if (
+                        columns.name == null
+                        || columns.drawingNo == null
+                        || columns.quantity == null
+                    ) return;
+                    const editableCount = table.querySelectorAll(
+                        'input:not([type="hidden"]):not([type="button"]):not([type="submit"]),textarea,select'
+                    ).length;
+                    if (requireEditable && !editableCount) return;
+                    const context = this.normalizeCopyText(
+                        this.getElementOwnText(
+                            table.closest('tr') || table
+                        )
+                    );
+                    candidates.push({
+                        ...model,
+                        headerRowIndex: rowIndex,
+                        columns,
+                        score: (context.includes('制造令') ? 20 : 0)
+                            + (editableCount ? 5 : 0)
+                    });
+                });
+            });
+            candidates.sort((left, right) =>
+                right.score - left.score
+                || left.table.querySelectorAll('table').length
+                    - right.table.querySelectorAll('table').length
+            );
+            return candidates[0] || null;
+        }
+
+        extractSourceJiguiRelationRows(doc) {
+            const model = this.findJiguiRelationTableModel(doc, false);
+            if (!model) return [];
+            const rows = [];
+            for (
+                let rowIndex = model.headerRowIndex + 1;
+                rowIndex < model.rows.length;
+                rowIndex += 1
+            ) {
+                const cells = model.grid[rowIndex] || [];
+                const item = {
+                    name: this.getMaterialCellText(
+                        cells[model.columns.name]
+                    ),
+                    drawingNo: this.getMaterialCellText(
+                        cells[model.columns.drawingNo]
+                    ),
+                    quantity: this.getMaterialCellText(
+                        cells[model.columns.quantity]
+                    )
+                };
+                if (
+                    item.name
+                    || item.drawingNo
+                    || item.quantity
+                ) rows.push(item);
+            }
+            return rows;
+        }
+
+        extractJiguiCopyTemplate(panel, iframeDoc, actualUrl) {
+            const read = (aliases) =>
+                this.extractNoticeCopyField(iframeDoc, aliases);
+            return {
+                sourceDocNo: this.extractDocNo(panel, iframeDoc),
+                sourceUrl: actualUrl,
+                fields: {
+                    workNo: this.extractStrictLabeledCellValue(
+                        iframeDoc,
+                        ['工号']
+                    ),
+                    productName: read(['产品名称']),
+                    partName: read(['部件名称']),
+                    partDrawingNo: this.extractCompleteLabeledCellValue(
+                        iframeDoc,
+                        ['部件图号']
+                    ),
+                    partClass: read(['部件类属']),
+                    sapRelated: read([
+                        '是否与SAP相关',
+                        '是否与SAP相关：'
+                    ]),
+                    hasNewMaterial: read([
+                        '是否有新物料号',
+                        '有无新物料号'
+                    ]),
+                    reason: this.extractRightAdjacentCellValue(
+                        iframeDoc,
+                        ['原因']
+                    ),
+                    noticeContent: this.extractRightAdjacentCellValue(
+                        iframeDoc,
+                        ['通知内容']
+                    )
+                },
+                relationRows: this.extractSourceJiguiRelationRows(
+                    iframeDoc
+                ),
+                distributionDepartments:
+                    this.extractSourceDistributionDepartments(iframeDoc)
+            };
+        }
+
+        collectSourceCopyFields(doc) {
+            if (!doc) return [];
+            const excluded = /^(编号|编\s*号|日期|日\s*期|填单人|创建人|创建日期|校核|批准|分发|状态|工号)$/;
+            const results = new Map();
+            Array.from(doc.querySelectorAll('td,th')).forEach((cell) => {
+                if (cell.querySelector('td,th')) return;
+                const raw = this.getElementOwnText(cell).trim();
+                if (!raw || raw.length > 6000) return;
+                let label = '';
+                let value = '';
+                const separator = raw.search(/[：:]/);
+                if (separator >= 0) {
+                    label = raw.slice(0, separator)
+                        .trim()
+                        .replace(/^[|｜丨¦]+/, '')
+                        .replace(/[|｜丨¦]+$/, '')
+                        .trim();
+                    value = raw.slice(separator + 1).trim();
+                } else return;
+                if (this.isCopyLabeledCellText(value)) value = '';
+                const normalizedLabel = this.normalizeCopyText(label);
+                const crossedPartDrawingBoundary = (candidateValue) =>
+                    normalizedLabel === this.normalizeCopyText('部件图号')
+                    && /^(附页|附件)/.test(
+                        this.normalizeCopyText(candidateValue)
+                            .replace(/^[|｜丨¦\\]+/, '')
+                    );
+                if (crossedPartDrawingBoundary(value)) value = '';
+                if (
+                    !normalizedLabel
+                    || normalizedLabel.length < 2
+                    || normalizedLabel.length > 18
+                    || excluded.test(normalizedLabel)
+                ) return;
+                if (!value && cell.nextElementSibling) {
+                    const nextValue = this.getElementOwnText(
+                        cell.nextElementSibling
+                    ).trim();
+                    value = (
+                        this.isCopyLabeledCellText(nextValue)
+                        || crossedPartDrawingBoundary(nextValue)
+                    )
+                        ? ''
+                        : nextValue;
+                }
+                if (!value || value.length > 6000) return;
+                if (!results.has(normalizedLabel)) {
+                    results.set(normalizedLabel, {
+                        key: 'generic:' + normalizedLabel,
+                        label: label.replace(/[：:]$/, '').trim(),
+                        aliases: [label.replace(/[：:]$/, '').trim()],
+                        value,
+                        preferredType: 'auto',
+                        optional: true
+                    });
+                }
+            });
+            return Array.from(results.values());
+        }
+
+        extractSourceCheckboxGroup(doc, aliases) {
+            const results = [];
+            const addChecked = (root) => {
+                if (!root) return;
+                Array.from(
+                    root.querySelectorAll('input[type="checkbox"]:checked')
+                ).forEach((input) => {
+                    const caption = this.getCheckboxCaption(doc, input);
+                    const normalized = this.normalizeCopyText(caption);
+                    if (
+                        normalized
+                        && normalized.length <= 30
+                        && !results.includes(normalized)
+                    ) results.push(normalized);
+                });
+            };
+            this.findCopyFieldContainers(doc, aliases).forEach((container) => {
+                addChecked(container);
+                addChecked(container.closest('tr'));
+                const cell = container.closest('td,th');
+                if (cell) addChecked(cell.parentElement);
+            });
+            return results;
+        }
+
+        openNoticeCopyDialog(template) {
+            const old = document.getElementById('jzt-notice-copy-overlay');
+            if (old) old.remove();
+
+            const overlay = document.createElement('div');
+            overlay.id = 'jzt-notice-copy-overlay';
+            overlay.style.cssText = [
+                'position:fixed',
+                'inset:0',
+                'z-index:320000',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'background:rgba(15,23,42,.45)',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif'
+            ].join(';');
+
+            const dialog = document.createElement('div');
+            dialog.id = 'jigui-detail-panel-notice-copy-dialog';
+            dialog.style.cssText = [
+                'width:430px',
+                'max-width:calc(100vw - 40px)',
+                'background:#fff9f1',
+                'border:1px solid #dbe3ef',
+                'border-radius:0',
+                'box-shadow:0 16px 40px rgba(15,23,42,.16)',
+                'overflow:hidden',
+                'box-sizing:border-box',
+                'font-size:15px',
+                'color:#334155'
+            ].join(';');
+            dialog.innerHTML = `
+                <div class="detail-header" style="background:rgb(30,80,220);color:#fff;height:40px;min-height:40px;padding:0;display:flex;align-items:center;justify-content:space-between;box-sizing:border-box;">
+                    <span class="detail-title" style="font-weight:700;line-height:1;display:flex;align-items:center;padding-left:0;margin-left:-8px;">📄 复制开单</span>
+                    <div style="display:flex;align-items:center;height:100%;margin-right:-6px;">
+                        <button type="button" data-action="close" title="关闭" aria-label="关闭" style="width:24px;height:24px;padding:0;margin:0;border:0;background:transparent;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;">
+                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                                <line x1="2.2" y1="2.2" x2="9.8" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                                <line x1="9.8" y1="2.2" x2="2.2" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div style="padding:14px 18px 18px;background:#fff9f1;">
+                    <div style="margin-bottom:12px;line-height:22px;">
+                        来源通知单：<strong data-field="source-doc"></strong>
+                    </div>
+                    <label style="display:block;margin-bottom:13px;">
+                        新工号：
+                        <input data-field="new-job-no" type="text" maxlength="100" autocomplete="off" placeholder="请输入本次开单使用的新工号" style="display:block;width:100%;height:42px;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#111827;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;outline:none;">
+                    </label>
+                    <label style="display:block;margin-bottom:9px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;">
+                        <span style="display:flex;align-items:center;gap:8px;font-weight:700;">
+                            <input data-field="copy-part" type="checkbox" checked style="width:17px;height:17px;margin:0;">
+                            复制部件名称、图号等基础信息
+                        </span>
+                    </label>
+                    <label style="display:block;margin-bottom:9px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;">
+                        <span style="display:flex;align-items:center;gap:8px;font-weight:700;">
+                            <input data-field="copy-options" type="checkbox" checked style="width:17px;height:17px;margin:0;">
+                            复制部件类属、会签部门及其他选项
+                        </span>
+                    </label>
+                    <label style="display:block;margin-bottom:10px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;">
+                        <span style="display:flex;align-items:center;gap:8px;font-weight:700;">
+                            <input data-field="copy-content" type="checkbox" checked style="width:17px;height:17px;margin:0;">
+                            复制通知内容
+                        </span>
+                    </label>
+                    <div style="margin-bottom:12px;color:#b45309;font-size:12px;line-height:1.6;">
+                        不复制原编号、日期、填单人、审批状态和文件附件；自动填入后仍需人工核对并使用原系统提交。
+                    </div>
+                    <div data-field="status" style="min-height:18px;margin-bottom:8px;color:#dc2626;font-size:13px;"></div>
+                    <div style="display:flex;justify-content:flex-end;gap:10px;">
+                        <button type="button" data-action="cancel" style="padding:8px 18px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;">取消</button>
+                        <button type="button" data-action="start" style="padding:8px 18px;border:1px solid #1d4ed8;border-radius:4px;background:#2563eb;color:#fff;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;font-weight:700;">开始复制</button>
+                    </div>
+                </div>
+            `;
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            dialog.querySelector('[data-field="source-doc"]').textContent =
+                template.sourceDocNo || '未识别编号';
+            const jobInput = dialog.querySelector('[data-field="new-job-no"]');
+            const status = dialog.querySelector('[data-field="status"]');
+            const close = () => overlay.remove();
+            dialog.querySelector('[data-action="close"]').addEventListener(
+                'click',
+                close
+            );
+            dialog.querySelector('[data-action="cancel"]').addEventListener(
+                'click',
+                close
+            );
+            dialog.querySelector('[data-action="start"]').addEventListener(
+                'click',
+                () => {
+                    const newJobNo = jobInput.value.trim();
+                    if (!newJobNo) {
+                        status.textContent = '请输入新工号。';
+                        jobInput.focus();
+                        return;
+                    }
+                    this.noticeCopySession = {
+                        template,
+                        newJobNo,
+                        options: {
+                            copyPart: dialog.querySelector(
+                                '[data-field="copy-part"]'
+                            ).checked,
+                            copyOptions: dialog.querySelector(
+                                '[data-field="copy-options"]'
+                            ).checked,
+                            copyContent: dialog.querySelector(
+                                '[data-field="copy-content"]'
+                            ).checked
+                        },
+                        targetPanelId: '',
+                        runToken: 0,
+                        completed: false
+                    };
+                    close();
+                    const panelId = this.searchPanel.openDetailPanel(
+                        'http://10.16.88.34/notice/createnote.asp',
+                        '创建通知单',
+                        'tongzhi'
+                    );
+                    if (panelId && this.noticeCopySession) {
+                        this.noticeCopySession.targetPanelId = panelId;
+                    }
+                }
+            );
+            jobInput.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    dialog.querySelector('[data-action="start"]').click();
+                }
+            });
+            window.setTimeout(() => jobInput.focus(), 30);
+        }
+
+        showNoticeCopyStatus(panel, text, type) {
+            let status = panel.querySelector('.notice-copy-progress');
+            if (!status) {
+                status = document.createElement('div');
+                status.className = 'notice-copy-progress';
+                status.style.cssText = [
+                    'position:absolute',
+                    'top:46px',
+                    'right:28px',
+                    'z-index:20',
+                    'width:auto',
+                    'max-width:calc(100% - 56px)',
+                    'box-sizing:border-box',
+                    'padding:8px 12px',
+                    'border:1px solid #93c5fd',
+                    'border-radius:4px',
+                    'background:#eff6ff',
+                    'color:#1d4ed8',
+                    'font-family:Microsoft YaHei,微软雅黑,sans-serif',
+                    'font-size:15px',
+                    'line-height:22px',
+                    'white-space:nowrap',
+                    'pointer-events:none',
+                    'box-shadow:0 4px 12px rgba(15,23,42,.14)'
+                ].join(';');
+                panel.appendChild(status);
+            }
+            const palette = type === 'success'
+                ? {
+                    border: '#86efac',
+                    background: '#f0fdf4',
+                    color: '#15803d'
+                }
+                : type === 'warning'
+                    ? {
+                        border: '#fdba74',
+                        background: '#fff7ed',
+                        color: '#b45309'
+                    }
+                    : {
+                        border: '#93c5fd',
+                        background: '#eff6ff',
+                        color: '#1d4ed8'
+                    };
+            status.style.borderColor = palette.border;
+            status.style.background = palette.background;
+            status.style.color = palette.color;
+            status.textContent = String(text || '');
+        }
+
+        isNoticeCreateUrl(url) {
+            return /^http:\/\/10\.16\.88\.34\/notice\/createnote\.asp(?:\?|$)/i
+                .test(String(url || ''));
+        }
+
+        isJiguiCreateUrl(url) {
+            return /^http:\/\/10\.16\.88\.34\/jigui\/createnote\.asp(?:\?|$)/i
+                .test(String(url || ''));
+        }
+
+        getElementOwnText(element) {
+            if (!element) return '';
+            const clone = element.cloneNode(true);
+            clone.querySelectorAll(
+                'input,select,textarea,button,option,script,style'
+            ).forEach((node) => node.remove());
+            return (clone.innerText || clone.textContent || '').trim();
+        }
+
+        findCopyFieldContainers(doc, aliases) {
+            if (!doc) return [];
+            const normalizedAliases = aliases.map((alias) =>
+                this.normalizeCopyText(alias)
+            );
+            const elements = Array.from(
+                doc.querySelectorAll('td,th,label,div,span')
+            );
+            return elements.map((element) => {
+                const text = this.normalizeCopyText(
+                    this.getElementOwnText(element)
+                );
+                const matched = text && text.length <= 40
+                    && normalizedAliases.some((alias) =>
+                    text === alias || text.startsWith(alias)
+                );
+                return { element, text, matched };
+            })
+                .filter((item) => item.matched)
+                .sort((left, right) => left.text.length - right.text.length)
+                .map((item) => item.element);
+        }
+
+        findCopyControls(doc, aliases, selector) {
+            const results = [];
+            const add = (nodes) => {
+                Array.from(nodes || []).forEach((node) => {
+                    if (!results.includes(node)) results.push(node);
+                });
+            };
+            this.findCopyFieldContainers(doc, aliases).forEach((container) => {
+                if (container.matches && container.matches(selector)) {
+                    add([container]);
+                }
+                add(container.querySelectorAll(selector));
+                const containingCell = container.closest('td,th');
+                if (containingCell && containingCell !== container) {
+                    add(containingCell.querySelectorAll(selector));
+                }
+                let sibling = container.nextElementSibling;
+                for (let index = 0; sibling && index < 2; index += 1) {
+                    if (sibling.matches && sibling.matches(selector)) {
+                        add([sibling]);
+                    }
+                    add(sibling.querySelectorAll(selector));
+                    sibling = sibling.nextElementSibling;
+                }
+            });
+            return results.filter((control) => !control.disabled);
+        }
+
+        waitForCopyCondition(test, timeoutMs = 3500) {
+            return new Promise((resolve) => {
+                const startedAt = Date.now();
+                const check = () => {
+                    let value = null;
+                    try {
+                        value = test();
+                    } catch (e) {}
+                    if (value) {
+                        resolve(value);
+                        return;
+                    }
+                    if (Date.now() - startedAt >= timeoutMs) {
+                        resolve(null);
+                        return;
+                    }
+                    window.setTimeout(check, 50);
+                };
+                check();
+            });
+        }
+
+        dispatchCopyChange(control, useClick) {
+            if (!control) return;
+            if (useClick && typeof control.click === 'function') {
+                control.click();
+                return;
+            }
+            const view = control.ownerDocument.defaultView || window;
+            const EventConstructor = view.Event || Event;
+            control.dispatchEvent(new EventConstructor('input', { bubbles: true }));
+            control.dispatchEvent(new EventConstructor('change', { bubbles: true }));
+            control.dispatchEvent(new EventConstructor('blur', { bubbles: true }));
+        }
+
+        setCopyTextControl(control, value) {
+            if (control == null || value == null) return false;
+            if (String(control.value || '') === String(value)) return true;
+            const view = control.ownerDocument.defaultView || window;
+            const prototype = control.tagName === 'TEXTAREA'
+                ? view.HTMLTextAreaElement.prototype
+                : view.HTMLInputElement.prototype;
+            const descriptor = Object.getOwnPropertyDescriptor(
+                prototype,
+                'value'
+            );
+            if (descriptor && descriptor.set) {
+                descriptor.set.call(control, value);
+            } else {
+                control.value = value;
+            }
+            this.dispatchCopyChange(control, false);
+            return true;
+        }
+
+        findMatchingSelectOption(select, desired) {
+            const normalizedDesired = this.normalizeCopyText(desired)
+                .replace(/通知单$/, '');
+            if (!normalizedDesired) return null;
+            return Array.from(select.options || []).find((option) => {
+                const text = this.normalizeCopyText(option.textContent)
+                    .replace(/通知单$/, '');
+                const value = this.normalizeCopyText(option.value);
+                return (
+                    text === normalizedDesired
+                    || value === normalizedDesired
+                );
+            }) || null;
+        }
+
+        async applyCopySelect(doc, aliases, desired, isNoticeType) {
+            if (!desired) return { status: 'skipped' };
+            const match = await this.waitForCopyCondition(() => {
+                const selects = isNoticeType
+                    ? Array.from(doc.querySelectorAll('select'))
+                    : this.findCopyControls(doc, aliases, 'select');
+                for (const select of selects) {
+                    const option = this.findMatchingSelectOption(select, desired);
+                    if (option) return { select, option };
+                }
+                return null;
+            });
+            if (!match) return { status: 'failed', label: aliases[0] };
+            if (match.select.value !== match.option.value) {
+                match.select.value = match.option.value;
+                this.dispatchCopyChange(match.select, false);
+            }
+            return { status: 'applied' };
+        }
+
+        async applyCopySelectOrText(doc, aliases, desired) {
+            if (!desired) return { status: 'skipped' };
+            const match = await this.waitForCopyCondition(() => {
+                const selects = this.findCopyControls(doc, aliases, 'select');
+                if (selects.length) {
+                    for (const select of selects) {
+                        const option = this.findMatchingSelectOption(
+                            select,
+                            desired
+                        );
+                        if (option) return { type: 'select', select, option };
+                    }
+                    return null;
+                }
+                const textControls = this.findCopyControls(
+                    doc,
+                    aliases,
+                    'input:not([type]),input[type="text"],textarea'
+                );
+                return textControls[0]
+                    ? { type: 'text', control: textControls[0] }
+                    : null;
+            }, 5000);
+            if (!match) return { status: 'failed', label: aliases[0] };
+            if (match.type === 'select') {
+                if (match.select.value !== match.option.value) {
+                    match.select.value = match.option.value;
+                    this.dispatchCopyChange(match.select, false);
+                }
+            } else {
+                this.setCopyTextControl(match.control, desired);
+            }
+            return { status: 'applied' };
+        }
+
+        async applyCopyText(doc, aliases, value, selector) {
+            if (!value) return { status: 'skipped' };
+            const control = await this.waitForCopyCondition(() => {
+                const controls = this.findCopyControls(
+                    doc,
+                    aliases,
+                    selector || 'input:not([type]),input[type="text"],textarea'
+                );
+                return controls[0] || null;
+            }, 2500);
+            if (!control) return { status: 'failed', label: aliases[0] };
+            this.setCopyTextControl(control, value);
+            return { status: 'applied' };
+        }
+
+        getRadioCaption(doc, input) {
+            const text = this.getRadioChoiceCaption(doc, input);
+            if (text) return this.normalizeCopyText(text);
+            return this.normalizeCopyText(input.value);
+        }
+
+        async applyCopyRadio(doc, aliases, desired) {
+            const normalizedDesired = this.normalizeCopyText(desired);
+            if (!normalizedDesired) return { status: 'skipped' };
+            const wanted = /(^|是否|相关|需要|有)是|^有$/.test(normalizedDesired)
+                ? '是'
+                : /否|无/.test(normalizedDesired)
+                    ? '否'
+                    : normalizedDesired;
+            const radio = await this.waitForCopyCondition(() => {
+                const radios = this.findCopyControls(
+                    doc,
+                    aliases,
+                    'input[type="radio"]'
+                );
+                if (radios.length >= 2 && wanted === '是') return radios[0];
+                if (radios.length >= 2 && wanted === '否') return radios[1];
+                return radios.find((input) => {
+                    const caption = this.getRadioCaption(doc, input);
+                    const value = this.normalizeCopyText(input.value);
+                    if (wanted === '是') {
+                        return /^(是|有)$/i.test(caption)
+                            || /^(1|yes|true)$/i.test(value);
+                    }
+                    if (wanted === '否') {
+                        return /^(否|无)$/i.test(caption)
+                            || /^(0|no|false)$/i.test(value);
+                    }
+                    return caption.includes(wanted) || value === wanted;
+                }) || null;
+            }, 2500);
+            if (!radio) return { status: 'failed', label: aliases[0] };
+            if (!radio.checked) this.dispatchCopyChange(radio, true);
+            return { status: 'applied' };
+        }
+
+        async applyCopyCheckboxes(doc, labels) {
+            if (!labels || !labels.length) return { applied: 0, failed: [] };
+            const failed = [];
+            let applied = 0;
+            for (const label of labels) {
+                const normalized = this.normalizeCopyText(label);
+                const checkbox = await this.waitForCopyCondition(() =>
+                    Array.from(doc.querySelectorAll('input[type="checkbox"]'))
+                        .filter((input) => !input.disabled)
+                        .find((input) => {
+                            const captions = this.getChoiceCaptions(doc, input);
+                            return captions.some((caption) => (
+                                caption === normalized
+                                || (
+                                    caption.length <= 30
+                                    && normalized.length <= 30
+                                    && (
+                                        caption.endsWith(normalized)
+                                        || normalized.endsWith(caption)
+                                    )
+                                )
+                            ));
+                        }) || null
+                , 2500);
+                if (!checkbox) {
+                    failed.push(label);
+                    continue;
+                }
+                if (!checkbox.checked) this.dispatchCopyChange(checkbox, true);
+                applied += 1;
+            }
+            return { applied, failed };
+        }
+
+        isCopyRunCurrent(session, runToken) {
+            return (
+                this.noticeCopySession === session
+                && session.runToken === runToken
+                && !session.completed
+            );
+        }
+
+        resumeNoticeCopySession(panel, iframeDoc, actualUrl) {
+            const session = this.noticeCopySession;
+            const isExpectedCreatePage = session
+                && session.copyModule === 'jigui'
+                ? this.isJiguiCreateUrl(actualUrl)
+                : this.isNoticeCreateUrl(actualUrl);
+            if (
+                !session
+                || session.completed
+                || !isExpectedCreatePage
+            ) return;
+            if (
+                session.targetPanelId
+                && session.targetPanelId !== panel.dataset.panelId
+            ) return;
+            session.targetPanelId = panel.dataset.panelId;
+            const runToken = ++session.runToken;
+            this.showNoticeCopyStatus(
+                panel,
+                '内容填写中，请稍等...',
+                'progress'
+            );
+            this.applyNoticeCopyTemplate(
+                panel,
+                iframeDoc,
+                session,
+                runToken
+            ).catch((error) => {
+                if (!this.isCopyRunCurrent(session, runToken)) return;
+                this.showNoticeCopyStatus(
+                    panel,
+                    '复制中断：' + error.message,
+                    'warning'
+                );
+            });
+        }
+
+        getPartClassValues(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return [];
+            const knownOptions = [
+                '励磁机/集电环装置',
+                '工艺消耗性材料',
+                '工艺装备明细表',
+                '冷却器系统',
+                '主机配套件',
+                '主机进口件',
+                '在线监测',
+                '装箱系统',
+                '励磁系统',
+                '油系统',
+                '水系统',
+                '氢系统',
+                '主机'
+            ].map((label) => ({
+                label,
+                normalized: this.normalizeCopyText(label)
+            })).sort((left, right) =>
+                right.normalized.length - left.normalized.length
+            );
+            const compact = this.normalizeCopyText(raw)
+                .replace(/[、，,；;]/g, '');
+            const matched = [];
+            let cursor = 0;
+            while (cursor < compact.length) {
+                const option = knownOptions.find((candidate) =>
+                    compact.startsWith(candidate.normalized, cursor)
+                );
+                if (option) {
+                    if (!matched.includes(option.label)) {
+                        matched.push(option.label);
+                    }
+                    cursor += option.normalized.length;
+                } else {
+                    cursor += 1;
+                }
+            }
+            if (matched.length) return matched;
+            return Array.from(new Set(
+                raw.split(/[\s、，,；;]+/)
+                    .map((item) => item.trim())
+                    .filter(Boolean)
+            ));
+        }
+
+        getNoticeCopySchema(template) {
+            const fields = template.fields || {};
+            const definitions = [
+                {
+                    key: 'noticeCategory',
+                    label: '通知单类别',
+                    aliases: ['通知单类别', '通知类别'],
+                    value: fields.noticeCategory,
+                    preferredType: 'select'
+                },
+                {
+                    key: 'categoryDetail',
+                    label: '类别细分',
+                    aliases: ['类别细分', '分类细分'],
+                    value: fields.categoryDetail,
+                    preferredType: 'select'
+                },
+                {
+                    key: 'serviceOrderJobNo',
+                    label: '服务订单工号',
+                    aliases: ['服务订单工号'],
+                    value: fields.serviceOrderJobNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'serviceRequestNo',
+                    label: '服务需求单/流程编号',
+                    aliases: [
+                        '服务需求单/流程编号',
+                        '服务需求单流程编号'
+                    ],
+                    value: fields.serviceRequestNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'externalNcrNo',
+                    label: '外部NCR编号',
+                    aliases: ['外部NCR编号'],
+                    value: fields.externalNcrNo,
+                    preferredType: 'auto',
+                    optional: true
+                },
+                {
+                    key: 'related',
+                    label: '与其他通知单是否关联',
+                    aliases: ['与其他通知单是否关联'],
+                    value: fields.related,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'relatedNotice',
+                    label: '其他通知单编号',
+                    aliases: ['其他通知单编号', '关联通知单编号'],
+                    value: fields.relatedNotice,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'dependentProduct',
+                    label: '是否依托产品验证',
+                    aliases: ['是否依托产品验证'],
+                    value: fields.dependentProduct,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'dependentProductJobNo',
+                    label: '依托产品验证工号',
+                    aliases: ['依托产品验证工号'],
+                    value: fields.dependentProductJobNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'productType',
+                    label: '产品类型',
+                    aliases: ['产品类型'],
+                    value: fields.productType,
+                    preferredType: 'select'
+                },
+                {
+                    key: 'productName',
+                    label: '产品名称',
+                    aliases: ['产品名称'],
+                    value: fields.productName,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'workNo',
+                    label: '工号',
+                    aliases: ['工号'],
+                    value: fields.workNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'partName',
+                    label: '部件名称',
+                    aliases: ['部件名称'],
+                    value: fields.partName,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'partDrawingNo',
+                    label: '部件图号',
+                    aliases: ['部件图号'],
+                    value: fields.partDrawingNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'partClass',
+                    label: '部件类属',
+                    aliases: ['部件类属'],
+                    value: this.getPartClassValues(fields.partClass),
+                    preferredType: 'checkbox'
+                },
+                {
+                    key: 'sapRelated',
+                    label: '是否与SAP相关',
+                    aliases: ['是否与SAP相关', '与SAP相关'],
+                    value: fields.sapRelated,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'shippingRelated',
+                    label: '是否与发运相关',
+                    aliases: ['是否与发运相关', '与发运相关'],
+                    value: fields.shippingRelated,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'needCountersign',
+                    label: '是否需会签',
+                    aliases: ['是否需会签', '是否需要会签'],
+                    value: fields.needCountersign,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'attachment',
+                    label: '附页',
+                    aliases: ['附页', '附件'],
+                    value: fields.attachment,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'hasNewMaterial',
+                    label: '是否有新物料号',
+                    aliases: ['是否有新物料号', '有无新物料号'],
+                    value: fields.hasNewMaterial,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'countersignDepartments',
+                    label: '会签部门',
+                    aliases: ['会签部门'],
+                    value: (
+                        template.countersignDepartments
+                        && template.countersignDepartments.length
+                    )
+                        ? template.countersignDepartments
+                        : (template.checkboxLabels || []),
+                    preferredType: 'checkbox'
+                },
+                {
+                    key: 'noticeContent',
+                    label: '通知内容',
+                    aliases: ['通知内容'],
+                    value: fields.noticeContent,
+                    preferredType: 'textarea'
+                },
+                {
+                    key: 'needMaterial',
+                    label: '是否需要布置物料',
+                    aliases: ['是否需要布置物料', '是否需布置物料'],
+                    value: fields.needMaterial,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'costChange',
+                    label: '是否发生成本变更',
+                    aliases: ['是否发生成本变更', '是否有成本变更'],
+                    value: fields.costChange,
+                    preferredType: 'radio'
+                }
+            ];
+            definitions.forEach((definition) => {
+                const isEmpty = Array.isArray(definition.value)
+                    ? definition.value.length === 0
+                    : String(definition.value || '').trim() === '';
+                if (!isEmpty) return;
+                const fallback = (template.genericFields || []).find(
+                    (field) => definition.aliases.some((alias) =>
+                        this.normalizeCopyText(field.label)
+                            === this.normalizeCopyText(alias)
+                    )
+                );
+                if (!fallback) return;
+                definition.value = definition.key === 'partClass'
+                    ? this.getPartClassValues(fallback.value)
+                    : definition.preferredType === 'checkbox'
+                        ? [fallback.value]
+                        : fallback.value;
+                definition.sourceFallback = true;
+            });
+            const knownLabels = new Set(
+                definitions.flatMap((definition) =>
+                    definition.aliases.map((alias) =>
+                        this.normalizeCopyText(alias)
+                    )
+                )
+            );
+            const generic = (template.genericFields || []).filter((field) =>
+                !knownLabels.has(this.normalizeCopyText(field.label))
+                && !/^(物料信息|新增物料|取消物料|新物料供方信息)$/.test(
+                    this.normalizeCopyText(field.label)
+                )
+                && !/工号|编号|日期|填单人|创建人|校核|批准|分发|状态/.test(
+                    this.normalizeCopyText(field.label)
+                )
+            );
+            return definitions.concat(generic).filter((definition) =>
+                Array.isArray(definition.value)
+                    ? definition.value.length > 0
+                    : String(definition.value || '').trim() !== ''
+            );
+        }
+
+        normalizeExactCopyValue(value) {
+            return String(value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/[\u200B-\u200D\uFEFF]/g, '')
+                .replace(/[（]/g, '(')
+                .replace(/[）]/g, ')')
+                .replace(/\s+/g, '')
+                .trim();
+        }
+
+        normalizeCopyInputValue(value) {
+            return String(value == null ? '' : value)
+                .replace(/\r\n?/g, '\n')
+                .replace(/\u00a0/g, ' ')
+                .trim();
+        }
+
+        getDestinationFieldLabel(text) {
+            const raw = String(text || '').replace(/\u00a0/g, ' ').trim();
+            if (!raw) return '';
+            const separator = raw.search(/[：:]/);
+            const label = separator >= 0 ? raw.slice(0, separator) : raw;
+            const normalized = this.normalizeCopyText(label);
+            return normalized.length <= 30 ? normalized : '';
+        }
+
+        getControlFieldLabelCandidates(doc, control) {
+            const candidates = [];
+            const add = (value) => {
+                const label = this.getDestinationFieldLabel(value);
+                if (label && !candidates.includes(label)) candidates.push(label);
+            };
+            if (control.id) {
+                const explicit = doc.querySelector(
+                    'label[for="' + CSS.escape(control.id) + '"]'
+                );
+                if (explicit) add(explicit.innerText || explicit.textContent);
+            }
+            const wrappingLabel = control.closest('label');
+            if (wrappingLabel) {
+                add(wrappingLabel.innerText || wrappingLabel.textContent);
+            }
+
+            let cell = control.closest('td,th');
+            if (cell) {
+                const directCellText = this.getElementOwnText(cell);
+                if (/[：:]/.test(directCellText)) {
+                    add(directCellText);
+                    if (candidates.length) return candidates;
+                }
+            }
+            let cellDepth = 0;
+            while (cell && cellDepth < 3) {
+                add(this.getElementOwnText(cell));
+                let previous = cell.previousElementSibling;
+                let distance = 0;
+                while (previous && distance < 3) {
+                    add(this.getElementOwnText(previous));
+                    previous = previous.previousElementSibling;
+                    distance += 1;
+                }
+                const parentCell = cell.parentElement
+                    ? cell.parentElement.closest('td,th')
+                    : null;
+                if (!parentCell || parentCell === cell) break;
+                cell = parentCell;
+                cellDepth += 1;
+            }
+            return candidates;
+        }
+
+        findCopyControlsByIdentity(doc, aliases, selector) {
+            if (!doc) return [];
+            const wanted = aliases.map((alias) =>
+                this.normalizeCopyText(alias)
+            );
+            return Array.from(doc.querySelectorAll(selector)).filter(
+                (control) => {
+                    if (control.disabled) return false;
+                    const labels = this.getControlFieldLabelCandidates(
+                        doc,
+                        control
+                    );
+                    return labels.some((label) => wanted.includes(label));
+                }
+            );
+        }
+
+        getIdentifiedCopyControls(doc, aliases, selector) {
+            const identified = this.findCopyControlsByIdentity(
+                doc,
+                aliases,
+                selector
+            );
+            const fallback = this.findCopyControls(doc, aliases, selector);
+            if (/checkbox/i.test(selector)) {
+                return Array.from(new Set(identified.concat(fallback)));
+            }
+            return identified.length ? identified : fallback;
+        }
+
+        isCopyControlVisible(control) {
+            if (!control || !control.isConnected) return false;
+            if (
+                control.hidden
+                || String(control.type || '').toLowerCase() === 'hidden'
+            ) return false;
+            const view = control.ownerDocument
+                ? control.ownerDocument.defaultView
+                : null;
+            let element = control;
+            while (
+                element
+                && element.nodeType === 1
+                && element !== control.ownerDocument.documentElement
+            ) {
+                if (element.hidden) return false;
+                if (view && typeof view.getComputedStyle === 'function') {
+                    const style = view.getComputedStyle(element);
+                    if (
+                        style.display === 'none'
+                        || style.visibility === 'hidden'
+                        || style.visibility === 'collapse'
+                    ) return false;
+                }
+                element = element.parentElement;
+            }
+            return true;
+        }
+
+        getCompleteCopyCheckboxGroup(doc, aliases) {
+            const wanted = aliases.map((alias) =>
+                this.normalizeCopyText(alias)
+            );
+            if (
+                !wanted.includes('部件类属')
+                && !wanted.includes('会签部门')
+            ) return [];
+            const results = [];
+            const add = (root) => {
+                if (!root) return;
+                Array.from(
+                    root.querySelectorAll('input[type="checkbox"]')
+                ).forEach((checkbox) => {
+                    if (
+                        !checkbox.disabled
+                        && !results.includes(checkbox)
+                    ) results.push(checkbox);
+                });
+            };
+            const addRowSpan = (startRow, spanValue) => {
+                let row = startRow;
+                const span = Math.max(
+                    1,
+                    Number.parseInt(String(spanValue || 1), 10) || 1
+                );
+                for (
+                    let offset = 0;
+                    row && offset < span;
+                    offset += 1
+                ) {
+                    add(row);
+                    row = row.nextElementSibling;
+                    while (row && row.tagName !== 'TR') {
+                        row = row.nextElementSibling;
+                    }
+                }
+            };
+            this.findCopyFieldContainers(doc, aliases).forEach((container) => {
+                let fieldCell = container.closest('td,th');
+                let row = fieldCell
+                    ? fieldCell.closest('tr')
+                    : container.closest('tr');
+                for (let depth = 0; row && depth < 3; depth += 1) {
+                    addRowSpan(
+                        row,
+                        fieldCell ? fieldCell.rowSpan : 1
+                    );
+                    const parentCell = row.parentElement
+                        ? row.parentElement.closest('td,th')
+                        : null;
+                    fieldCell = parentCell;
+                    row = parentCell ? parentCell.closest('tr') : null;
+                }
+            });
+            return results;
+        }
+
+        getCopyFieldControls(doc, aliases) {
+            const controls = {
+                selects: this.getIdentifiedCopyControls(
+                    doc,
+                    aliases,
+                    'select'
+                ),
+                textareas: this.getIdentifiedCopyControls(
+                    doc,
+                    aliases,
+                    'textarea'
+                ),
+                texts: this.getIdentifiedCopyControls(
+                    doc,
+                    aliases,
+                    'input:not([type]),input[type="text"]'
+                ),
+                radios: this.getIdentifiedCopyControls(
+                    doc,
+                    aliases,
+                    'input[type="radio"]'
+                ),
+                checkboxes: this.getIdentifiedCopyControls(
+                    doc,
+                    aliases,
+                    'input[type="checkbox"]'
+                )
+            };
+            controls.checkboxes = Array.from(new Set(
+                controls.checkboxes.concat(
+                    this.getCompleteCopyCheckboxGroup(doc, aliases)
+                )
+            ));
+            const allControls = Object.values(controls).flat();
+            if (allControls.some((control) =>
+                this.isCopyControlVisible(control)
+            )) {
+                Object.keys(controls).forEach((key) => {
+                    controls[key] = controls[key].filter((control) =>
+                        this.isCopyControlVisible(control)
+                    );
+                });
+            }
+            return controls;
+        }
+
+        findExactCopyOption(select, desired) {
+            const wanted = this.normalizeExactCopyValue(desired);
+            if (!wanted) return null;
+            return Array.from(select.options || []).find((option) => {
+                const text = this.normalizeExactCopyValue(option.textContent);
+                return text === wanted;
+            }) || null;
+        }
+
+        getCopyPolarity(value) {
+            const normalized = this.normalizeCopyText(value);
+            if (/^(是|有|需要|相关|1|yes|true)$/i.test(normalized)) {
+                return 'positive';
+            }
+            if (/^(否|无|不需要|不相关|0|no|false)$/i.test(normalized)) {
+                return 'negative';
+            }
+            if (/未|不|否|无/.test(normalized)) return 'negative';
+            if (/是|有/.test(normalized)) return 'positive';
+            return '';
+        }
+
+        getRadioOptionModel(doc, radios) {
+            if (!radios.length) return [];
+            const firstPrevious = this.normalizeCopyText(
+                this.getChoiceSideText(radios[0], 'previous')
+            );
+            const firstNext = this.normalizeCopyText(
+                this.getChoiceSideText(radios[0], 'next')
+            );
+            const previousHasBinary = /(是|否|有|无)$/.test(firstPrevious);
+            const nextHasBinary = /^(是|否|有|无)/.test(firstNext);
+            const orientation = previousHasBinary
+                ? 'previous'
+                : nextHasBinary
+                    ? 'next'
+                    : '';
+            return radios.map((radio, index) => {
+                let label = orientation
+                    ? this.normalizeCopyText(
+                        this.getChoiceSideText(radio, orientation)
+                    )
+                    : this.getRadioChoiceCaption(doc, radio);
+                const binary = orientation === 'previous'
+                    ? label.match(/(是|否|有|无)$/)
+                    : label.match(/^(是|否|有|无)/);
+                if (binary) label = binary[1];
+                const value = this.normalizeCopyText(radio.value);
+                let polarity = radios.length === 2
+                    ? (index === 0 ? 'positive' : 'negative')
+                    : this.getCopyPolarity(label)
+                        || this.getCopyPolarity(value);
+                return { radio, label, value, polarity };
+            });
+        }
+
+        waitForCopyDomStable(doc, quietMs = 180, maxMs = 1800) {
+            return new Promise((resolve) => {
+                if (!doc || !doc.documentElement) {
+                    resolve();
+                    return;
+                }
+                let quietTimer = null;
+                let finished = false;
+                const finish = () => {
+                    if (finished) return;
+                    finished = true;
+                    if (quietTimer) window.clearTimeout(quietTimer);
+                    window.clearTimeout(maxTimer);
+                    observer.disconnect();
+                    resolve();
+                };
+                const schedule = () => {
+                    if (quietTimer) window.clearTimeout(quietTimer);
+                    quietTimer = window.setTimeout(finish, quietMs);
+                };
+                const observer = new MutationObserver(schedule);
+                const maxTimer = window.setTimeout(finish, maxMs);
+                try {
+                    observer.observe(doc.documentElement, {
+                        childList: true,
+                        subtree: true,
+                        attributes: true
+                    });
+                    schedule();
+                } catch (e) {
+                    finish();
+                }
+            });
+        }
+
+        async applyCopySchemaField(doc, definition, timeoutMs = 500) {
+            const desired = definition.value;
+            const desiredValues = Array.isArray(desired)
+                ? desired.map((item) => this.normalizeExactCopyValue(item))
+                : [];
+            const found = await this.waitForCopyCondition(() => {
+                const controls = this.getCopyFieldControls(
+                    doc,
+                    definition.aliases
+                );
+                const expectedReady = definition.preferredType === 'select'
+                    ? controls.selects.length > 0
+                    : definition.preferredType === 'textarea'
+                        ? controls.textareas.length > 0
+                        : definition.preferredType === 'radio'
+                            ? controls.radios.length > 0
+                            : definition.preferredType === 'checkbox'
+                                ? controls.checkboxes.length > 0
+                                : Object.values(controls)
+                                    .some((items) => items.length > 0);
+                return expectedReady ? controls : null;
+            }, timeoutMs);
+            if (!found) {
+                return {
+                    status: 'failed',
+                    label: definition.label,
+                    reason: '未找到对应控件'
+                };
+            }
+
+            const type = definition.preferredType;
+            const useVisibleAutoText = (
+                type === 'auto'
+                && definition.key === 'productName'
+                && (found.textareas.length || found.texts.length)
+            );
+            if (
+                type === 'select'
+                || (
+                    type === 'auto'
+                    && found.selects.length
+                    && !useVisibleAutoText
+                )
+            ) {
+                const selectMatch = await this.waitForCopyCondition(() => {
+                    const current = this.getCopyFieldControls(
+                        doc,
+                        definition.aliases
+                    );
+                    for (const select of current.selects) {
+                        const option = this.findExactCopyOption(select, desired);
+                        if (option) return { select, option };
+                    }
+                    return null;
+                }, Math.max(1800, timeoutMs));
+                if (!selectMatch) {
+                    const current = this.getCopyFieldControls(
+                        doc,
+                        definition.aliases
+                    );
+                    if (definition.key === 'workNo') {
+                        current.selects.forEach((select) => {
+                            select.selectedIndex = -1;
+                        });
+                    }
+                    return {
+                        status: 'failed',
+                        label: definition.label,
+                        reason: '下拉菜单没有完全相同的选项'
+                    };
+                }
+                if (selectMatch.select.value !== selectMatch.option.value) {
+                    selectMatch.select.value = selectMatch.option.value;
+                    this.dispatchCopyChange(selectMatch.select, false);
+                    await this.waitForCopyDomStable(doc);
+                }
+                return {
+                    status: 'applied',
+                    label: definition.label,
+                    type: 'select'
+                };
+            }
+
+            if (
+                type === 'textarea'
+                || (
+                    type === 'auto'
+                    && (found.textareas.length || found.texts.length)
+                )
+            ) {
+                const control = type === 'textarea'
+                    ? found.textareas[0]
+                    : found.textareas[0] || found.texts[0];
+                if (!control) {
+                    return {
+                        status: 'failed',
+                        label: definition.label,
+                        reason: '未找到文本输入框'
+                    };
+                }
+                this.setCopyTextControl(control, desired);
+                return {
+                    status: 'applied',
+                    label: definition.label,
+                    type: control.tagName === 'TEXTAREA'
+                        ? 'textarea'
+                        : 'text'
+                };
+            }
+
+            if (type === 'radio' || (type === 'auto' && found.radios.length)) {
+                const polarity = this.getCopyPolarity(desired);
+                const models = this.getRadioOptionModel(doc, found.radios);
+                const target = models.find((model) =>
+                    polarity
+                        ? model.polarity === polarity
+                        : this.normalizeExactCopyValue(model.label)
+                            === this.normalizeExactCopyValue(desired)
+                );
+                if (!target) {
+                    return {
+                        status: 'failed',
+                        label: definition.label,
+                        reason: '未找到同名的单选项'
+                    };
+                }
+                if (!target.radio.checked) {
+                    this.dispatchCopyChange(target.radio, true);
+                    await this.waitForCopyDomStable(doc);
+                }
+                return {
+                    status: 'applied',
+                    label: definition.label,
+                    type: 'radio'
+                };
+            }
+
+            if (
+                type === 'checkbox'
+                || (type === 'auto' && found.checkboxes.length)
+            ) {
+                const controls = found.checkboxes;
+                const matched = [];
+                const unmatched = [];
+                for (const desiredValue of desiredValues) {
+                    const checkbox = controls.find((input) =>
+                        this.getChoiceCaptions(doc, input).some((caption) =>
+                            this.normalizeExactCopyValue(caption)
+                                === desiredValue
+                        )
+                    );
+                    if (checkbox) matched.push(checkbox);
+                    else unmatched.push(desiredValue);
+                }
+                if (matched.length !== desiredValues.length) {
+                    return {
+                        status: 'failed',
+                        label: definition.label,
+                        reason: '未找到复选项：' + unmatched.join('、')
+                    };
+                }
+                controls.forEach((checkbox) => {
+                    const shouldBeChecked = matched.includes(checkbox);
+                    if (checkbox.checked !== shouldBeChecked) {
+                        this.dispatchCopyChange(checkbox, true);
+                    }
+                });
+                return {
+                    status: 'applied',
+                    label: definition.label,
+                    type: 'checkbox'
+                };
+            }
+
+            return {
+                status: 'failed',
+                label: definition.label,
+                reason: '无法识别输入类型'
+            };
+        }
+
+        verifyCopySchemaField(doc, definition) {
+            const controls = this.getCopyFieldControls(
+                doc,
+                definition.aliases
+            );
+            const desired = definition.value;
+            const expected = this.normalizeExactCopyValue(desired);
+            if (
+                definition.preferredType === 'auto'
+                && definition.key === 'productName'
+                && (controls.textareas.length || controls.texts.length)
+            ) {
+                return controls.textareas.concat(controls.texts).some(
+                    (control) =>
+                        this.normalizeCopyInputValue(control.value)
+                            === this.normalizeCopyInputValue(desired)
+                );
+            }
+            if (controls.selects.length) {
+                return controls.selects.some((select) => {
+                    const selected = select.options
+                        ? select.options[select.selectedIndex]
+                        : null;
+                    return selected
+                        && this.normalizeExactCopyValue(selected.textContent)
+                            === expected;
+                });
+            }
+            if (controls.textareas.length || controls.texts.length) {
+                return controls.textareas.concat(controls.texts).some(
+                    (control) =>
+                        this.normalizeCopyInputValue(control.value)
+                            === this.normalizeCopyInputValue(desired)
+                );
+            }
+            if (controls.radios.length) {
+                const polarity = this.getCopyPolarity(desired);
+                return this.getRadioOptionModel(doc, controls.radios).some(
+                    (model) =>
+                        model.radio.checked
+                        && (
+                            polarity
+                                ? model.polarity === polarity
+                                : this.normalizeExactCopyValue(model.label)
+                                    === expected
+                        )
+                );
+            }
+            if (controls.checkboxes.length && Array.isArray(desired)) {
+                return desired.every((item) => {
+                    const wanted = this.normalizeExactCopyValue(item);
+                    return controls.checkboxes.some((checkbox) =>
+                        checkbox.checked
+                        && this.getChoiceCaptions(doc, checkbox).some(
+                            (caption) =>
+                                this.normalizeExactCopyValue(caption)
+                                    === wanted
+                        )
+                    );
+                });
+            }
+            return false;
+        }
+
+        async resetCopiedWorkNumber(doc) {
+            const controls = await this.waitForCopyCondition(() => {
+                const current = this.getCopyFieldControls(doc, ['工号']);
+                return current.selects.length || current.texts.length
+                    ? current
+                    : null;
+            }, 3500);
+            if (!controls) return;
+            if (controls.selects.length) {
+                const select = controls.selects[0];
+                const placeholder = Array.from(select.options || []).find(
+                    (option) =>
+                        /请选择.*工号/.test(option.textContent || '')
+                        || String(option.value || '') === ''
+                ) || select.options[0];
+                if (placeholder && select.value !== placeholder.value) {
+                    select.value = placeholder.value;
+                    this.dispatchCopyChange(select, false);
+                    await this.waitForCopyDomStable(doc);
+                }
+                return;
+            }
+            if (controls.texts[0] && controls.texts[0].value) {
+                this.setCopyTextControl(controls.texts[0], '');
+            }
+        }
+
+        getCreateNoticeType(sourceNoticeType) {
+            const normalized = this.normalizeCopyText(sourceNoticeType)
+                .replace(/通知单$/, '');
+            if (normalized === '常规订单变更') return '订单变更';
+            return String(sourceNoticeType || '').replace(/通知单$/, '').trim();
+        }
+
+        getDistributionCheckboxMap(model) {
+            if (!model) return new Map();
+            for (
+                let rowIndex = model.headerRowIndex + 1;
+                rowIndex < Math.min(
+                    model.rows.length,
+                    model.headerRowIndex + 5
+                );
+                rowIndex += 1
+            ) {
+                const cells = model.grid[rowIndex] || [];
+                const result = new Map();
+                Object.entries(model.headerByColumn).forEach(
+                    ([columnText, label]) => {
+                        if (label === '发送部门') return;
+                        const cell = cells[Number(columnText)];
+                        if (!cell) return;
+                        const checkbox = Array.from(
+                            cell.querySelectorAll('input[type="checkbox"]')
+                        ).find((input) =>
+                            !input.disabled
+                            && input.closest('table') === model.table
+                        );
+                        if (checkbox) result.set(label, checkbox);
+                    }
+                );
+                if (result.size >= 3) return result;
+            }
+            return new Map();
+        }
+
+        async applyDistributionDepartments(doc, sourceDepartments) {
+            const desired = Array.from(new Set(
+                (sourceDepartments || [])
+                    .map((label) => this.normalizeCopyText(label))
+                    .filter(Boolean)
+            ));
+            if (!desired.length) {
+                return {
+                    status: 'applied',
+                    label: '发送部门打点（0项）',
+                    type: 'distribution-table'
+                };
+            }
+            const matched = await this.waitForCopyCondition(() => {
+                const model = this.findDistributionTableModel(doc);
+                const checkboxMap = this.getDistributionCheckboxMap(model);
+                return checkboxMap.size
+                    ? { model, checkboxMap }
+                    : null;
+            }, 3000);
+            if (!matched) {
+                return {
+                    status: 'failed',
+                    label: '发送部门打点（' + desired.length + '项）',
+                    type: 'distribution-table',
+                    reason: '创建页未找到发送部门复选框表格'
+                };
+            }
+            const missing = desired.filter(
+                (label) => !matched.checkboxMap.has(label)
+            );
+            matched.checkboxMap.forEach((checkbox, label) => {
+                const shouldBeChecked = desired.includes(label);
+                if (checkbox.checked !== shouldBeChecked) {
+                    this.dispatchCopyChange(checkbox, true);
+                }
+            });
+            const inconsistent = [];
+            matched.checkboxMap.forEach((checkbox, label) => {
+                if (checkbox.checked !== desired.includes(label)) {
+                    inconsistent.push(label);
+                }
+            });
+            const failures = [];
+            if (missing.length) {
+                failures.push('目标页未找到：' + missing.join('、'));
+            }
+            if (inconsistent.length) {
+                failures.push('勾选后不一致：' + inconsistent.join('、'));
+            }
+            return {
+                status: failures.length ? 'failed' : 'applied',
+                label: '发送部门打点（' + desired.length + '项）',
+                type: 'distribution-table',
+                reason: failures.join('；')
+            };
+        }
+
+        getTargetMaterialDataRows(model, sectionType = 'add') {
+            if (!model) return [];
+            const rows = [];
+            for (
+                let rowIndex = model.headerRowIndex + 1;
+                rowIndex < model.rows.length;
+                rowIndex += 1
+            ) {
+                const row = model.rows[rowIndex];
+                const rowText = this.normalizeCopyText(
+                    this.getElementOwnText(row)
+                );
+                if (
+                    sectionType === 'add'
+                    && /取消物料/.test(rowText)
+                ) break;
+                const editable = Array.from(
+                    row.querySelectorAll('input,textarea,select')
+                ).filter((control) =>
+                    !control.disabled
+                    && control.closest('table') === model.table
+                    && !/^(button|submit|reset|hidden)$/i.test(
+                        control.type || ''
+                    )
+                );
+                if (editable.length) rows.push({ row, rowIndex });
+            }
+            return rows;
+        }
+
+        findAddMaterialButton(model) {
+            if (!model) return null;
+            const headerRow = model.rows[model.headerRowIndex];
+            const enclosingRow = model.table.closest('td,th')
+                ? model.table.closest('td,th').closest('tr')
+                : null;
+            const roots = Array.from(new Set(
+                [headerRow, enclosingRow, model.table].filter(Boolean)
+            ));
+            const controls = roots.flatMap((root) => Array.from(
+                root.querySelectorAll(
+                    'button,input[type="button"],input[type="submit"]'
+                )
+            ));
+            return Array.from(new Set(controls)).find((control) => {
+                if (
+                    control.disabled
+                ) return false;
+                const caption = this.normalizeCopyText(
+                    control.value || control.textContent || ''
+                );
+                return caption === '+';
+            }) || null;
+        }
+
+        getTargetMaterialControl(model, rowIndex, key) {
+            const columnIndex = model.columns[key];
+            if (columnIndex == null || !model.grid[rowIndex]) return null;
+            const cell = model.grid[rowIndex][columnIndex];
+            if (!cell) return null;
+            const controls = Array.from(
+                cell.querySelectorAll('input,textarea,select')
+            ).filter((control) =>
+                !control.disabled
+                && control.closest('table') === model.table
+                && !/^(button|submit|reset|hidden)$/i.test(
+                    control.type || ''
+                )
+            );
+            if (key === 'isNewMaterial') {
+                return controls.find((control) =>
+                    String(control.type || '').toLowerCase() === 'checkbox'
+                ) || null;
+            }
+            return controls.find((control) =>
+                !/^(checkbox|radio)$/i.test(control.type || '')
+            ) || null;
+        }
+
+        setTargetMaterialControl(control, value) {
+            if (!control) return false;
+            if (control.tagName === 'SELECT') {
+                const option = this.findExactCopyOption(control, value);
+                if (!option) return false;
+                if (control.value !== option.value) {
+                    control.value = option.value;
+                    this.dispatchCopyChange(control, false);
+                }
+                return true;
+            }
+            return this.setCopyTextControl(control, value == null ? '' : value);
+        }
+
+        verifyTargetMaterialControl(control, value, key) {
+            if (!control) return false;
+            if (key === 'isNewMaterial') {
+                return control.checked === Boolean(value);
+            }
+            if (control.tagName === 'SELECT') {
+                const option = control.options
+                    ? control.options[control.selectedIndex]
+                    : null;
+                return Boolean(
+                    option
+                    && this.normalizeExactCopyValue(option.textContent)
+                        === this.normalizeExactCopyValue(value)
+                );
+            }
+            return this.normalizeCopyInputValue(control.value)
+                === this.normalizeCopyInputValue(value);
+        }
+
+        async applyCopiedMaterialRows(
+            doc,
+            sourceRows,
+            sectionType = 'add'
+        ) {
+            const rows = Array.isArray(sourceRows) ? sourceRows : [];
+            const sectionLabel = sectionType === 'cancel'
+                ? '取消物料'
+                : '新增物料';
+            if (!rows.length) {
+                return {
+                    status: 'failed',
+                    label: sectionLabel + '明细',
+                    type: 'material-table',
+                    reason: '来源通知单未读取到' + sectionLabel + '行'
+                };
+            }
+            let model = await this.waitForCopyCondition(
+                () => this.findMaterialTableModel(doc, sectionType),
+                3000
+            );
+            if (!model) {
+                return {
+                    status: 'failed',
+                    label: sectionLabel + '明细（' + rows.length + '行）',
+                    type: 'material-table',
+                    reason: '创建页未找到' + sectionLabel + '表'
+                };
+            }
+
+            let targetRows = this.getTargetMaterialDataRows(
+                model,
+                sectionType
+            );
+            let addAttempts = 0;
+            while (
+                targetRows.length < rows.length
+                && addAttempts < rows.length + 2
+            ) {
+                addAttempts += 1;
+                const addButton = this.findAddMaterialButton(model);
+                if (!addButton) {
+                    return {
+                        status: 'failed',
+                        label: sectionLabel + '明细（'
+                            + rows.length + '行）',
+                        type: 'material-table',
+                        reason: '只生成 ' + targetRows.length
+                            + ' 行，未找到' + sectionLabel + '“+”按钮'
+                    };
+                }
+                addButton.click();
+                await this.waitForCopyDomStable(doc, 120, 1200);
+                model = this.findMaterialTableModel(doc, sectionType);
+                if (!model) break;
+                const updatedRows = this.getTargetMaterialDataRows(
+                    model,
+                    sectionType
+                );
+                if (updatedRows.length <= targetRows.length) {
+                    const previousCount = targetRows.length;
+                    await this.waitForCopyCondition(() => {
+                        const currentModel = this.findMaterialTableModel(
+                            doc,
+                            sectionType
+                        );
+                        return (
+                            currentModel
+                            && this.getTargetMaterialDataRows(
+                                currentModel,
+                                sectionType
+                            ).length
+                                > previousCount
+                        ) ? currentModel : null;
+                    }, 1000);
+                    model = this.findMaterialTableModel(doc, sectionType);
+                    if (
+                        !model
+                        || this.getTargetMaterialDataRows(
+                            model,
+                            sectionType
+                        ).length
+                            <= previousCount
+                    ) break;
+                }
+                targetRows = this.getTargetMaterialDataRows(
+                    model,
+                    sectionType
+                );
+            }
+            if (!model || targetRows.length < rows.length) {
+                return {
+                    status: 'failed',
+                    label: sectionLabel + '明细（' + rows.length + '行）',
+                    type: 'material-table',
+                    reason: '目标行生成失败：需要 ' + rows.length
+                        + ' 行，实际 ' + targetRows.length + ' 行'
+                };
+            }
+
+            const fieldLabels = {
+                level: '层级',
+                materialNo: '物料号',
+                drawingNo: '图号',
+                description: '物料描述',
+                quantity: '数量',
+                unit: '单位',
+                remark: '备注',
+                isNewMaterial: '新物料',
+                processRoute: '工艺路线',
+                completionTime: '要求完工时间',
+                unitPrice: '单价',
+                addedCost: '追加成本'
+            };
+            const keys = Object.keys(fieldLabels);
+            const failures = [];
+            rows.forEach((sourceRow, sourceIndex) => {
+                const target = targetRows[sourceIndex];
+                keys.forEach((key) => {
+                    const columnExists = model.columns[key] != null;
+                    const sourceValue = key === 'isNewMaterial'
+                        ? Boolean(sourceRow[key])
+                        : String(sourceRow[key] == null ? '' : sourceRow[key]);
+                    if (!columnExists) {
+                        if (sourceValue !== '' && sourceValue !== false) {
+                            failures.push(
+                                '第' + (sourceIndex + 1) + '行'
+                                + fieldLabels[key] + '：目标页无此列'
+                            );
+                        }
+                        return;
+                    }
+                    const control = this.getTargetMaterialControl(
+                        model,
+                        target.rowIndex,
+                        key
+                    );
+                    if (!control) {
+                        if (sourceValue !== '' && sourceValue !== false) {
+                            failures.push(
+                                '第' + (sourceIndex + 1) + '行'
+                                + fieldLabels[key] + '：未找到输入框'
+                            );
+                        }
+                        return;
+                    }
+                    if (key === 'isNewMaterial') {
+                        if (control.checked !== sourceValue) {
+                            this.dispatchCopyChange(control, true);
+                        }
+                    } else if (!this.setTargetMaterialControl(
+                        control,
+                        sourceValue
+                    )) {
+                        failures.push(
+                            '第' + (sourceIndex + 1) + '行'
+                            + fieldLabels[key] + '：写入失败'
+                        );
+                    }
+                });
+            });
+
+            model = this.findMaterialTableModel(doc, sectionType);
+            targetRows = this.getTargetMaterialDataRows(
+                model,
+                sectionType
+            );
+            rows.forEach((sourceRow, sourceIndex) => {
+                const target = targetRows[sourceIndex];
+                if (!target) return;
+                keys.forEach((key) => {
+                    if (model.columns[key] == null) return;
+                    const control = this.getTargetMaterialControl(
+                        model,
+                        target.rowIndex,
+                        key
+                    );
+                    const sourceValue = key === 'isNewMaterial'
+                        ? Boolean(sourceRow[key])
+                        : String(sourceRow[key] == null ? '' : sourceRow[key]);
+                    if (
+                        control
+                        && !this.verifyTargetMaterialControl(
+                            control,
+                            sourceValue,
+                            key
+                        )
+                    ) {
+                        const message = '第' + (sourceIndex + 1) + '行'
+                            + fieldLabels[key] + '：回填后不一致';
+                        if (!failures.includes(message)) failures.push(message);
+                    }
+                });
+            });
+            return {
+                status: failures.length ? 'failed' : 'applied',
+                label: sectionLabel + '明细（' + rows.length + '行）',
+                type: 'material-table',
+                reason: failures.join('；')
+            };
+        }
+
+        getJiguiPartClassValues(value) {
+            const mapped = String(value || '').replace(
+                /集电环装置\s*[\/／、]\s*励磁机/g,
+                '励磁机/集电环装置'
+            );
+            return this.getPartClassValues(mapped);
+        }
+
+        getJiguiCopySchema(template) {
+            const fields = template.fields || {};
+            return [
+                {
+                    key: 'workNo',
+                    label: '工号',
+                    aliases: ['工号'],
+                    value: fields.workNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'productName',
+                    label: '产品名称',
+                    aliases: ['产品名称'],
+                    value: fields.productName,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'partName',
+                    label: '部件名称',
+                    aliases: ['部件名称'],
+                    value: fields.partName,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'partDrawingNo',
+                    label: '部件图号',
+                    aliases: ['部件图号'],
+                    value: fields.partDrawingNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'partClass',
+                    label: '部件类属',
+                    aliases: ['部件类属'],
+                    value: this.getJiguiPartClassValues(fields.partClass),
+                    preferredType: 'checkbox'
+                },
+                {
+                    key: 'sapRelated',
+                    label: '是否与SAP相关',
+                    aliases: ['是否与SAP相关', '与SAP相关'],
+                    value: fields.sapRelated,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'hasNewMaterial',
+                    label: '是否有新物料号',
+                    aliases: ['是否有新物料号', '有无新物料号'],
+                    value: fields.hasNewMaterial,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'reason',
+                    label: '原因',
+                    aliases: ['原因'],
+                    value: fields.reason,
+                    preferredType: 'textarea'
+                },
+                {
+                    key: 'noticeContent',
+                    label: '通知内容',
+                    aliases: ['通知内容'],
+                    value: fields.noticeContent,
+                    preferredType: 'textarea'
+                }
+            ].filter((definition) =>
+                Array.isArray(definition.value)
+                    ? definition.value.length > 0
+                    : String(definition.value || '').trim() !== ''
+            );
+        }
+
+        getTargetJiguiRelationRows(model) {
+            if (!model) return [];
+            const rows = [];
+            for (
+                let rowIndex = model.headerRowIndex + 1;
+                rowIndex < model.rows.length;
+                rowIndex += 1
+            ) {
+                const row = model.rows[rowIndex];
+                const editable = Array.from(
+                    row.querySelectorAll('input,textarea,select')
+                ).filter((control) =>
+                    !control.disabled
+                    && control.closest('table') === model.table
+                    && !/^(button|submit|reset|hidden)$/i.test(
+                        control.type || ''
+                    )
+                );
+                if (editable.length) rows.push({ row, rowIndex });
+            }
+            return rows;
+        }
+
+        getTargetJiguiRelationControl(model, rowIndex, key) {
+            const columnIndex = model.columns[key];
+            const cell = model.grid[rowIndex]
+                ? model.grid[rowIndex][columnIndex]
+                : null;
+            if (!cell) return null;
+            return Array.from(
+                cell.querySelectorAll('input,textarea,select')
+            ).find((control) =>
+                !control.disabled
+                && control.closest('table') === model.table
+                && !/^(button|submit|reset|hidden|checkbox|radio)$/i.test(
+                    control.type || ''
+                )
+            ) || null;
+        }
+
+        findAddJiguiRelationButton(model) {
+            if (!model) return null;
+            const roots = [
+                model.table,
+                model.table.closest('tr')
+            ].filter(Boolean);
+            return roots.flatMap((root) => Array.from(
+                root.querySelectorAll(
+                    'button,input[type="button"],input[type="submit"]'
+                )
+            )).find((control) =>
+                !control.disabled
+                && this.normalizeCopyText(
+                    control.value || control.textContent || ''
+                ) === '+'
+            ) || null;
+        }
+
+        async applyCopiedJiguiRelationRows(doc, sourceRows) {
+            const rows = Array.isArray(sourceRows) ? sourceRows : [];
+            if (!rows.length) return;
+            let model = await this.waitForCopyCondition(
+                () => this.findJiguiRelationTableModel(doc, false),
+                3000
+            );
+            if (!model) return;
+            let targetRows = this.getTargetJiguiRelationRows(model);
+            let attempts = 0;
+            while (
+                targetRows.length < rows.length
+                && attempts < rows.length + 2
+            ) {
+                attempts += 1;
+                const addButton = this.findAddJiguiRelationButton(model);
+                if (!addButton) break;
+                addButton.click();
+                await this.waitForCopyDomStable(doc, 120, 1200);
+                model = this.findJiguiRelationTableModel(doc, false);
+                if (!model) break;
+                targetRows = this.getTargetJiguiRelationRows(model);
+            }
+            rows.slice(0, targetRows.length).forEach((sourceRow, index) => {
+                const targetRow = targetRows[index];
+                ['name', 'drawingNo', 'quantity'].forEach((key) => {
+                    const control = this.getTargetJiguiRelationControl(
+                        model,
+                        targetRow.rowIndex,
+                        key
+                    );
+                    if (control) {
+                        this.setCopyTextControl(
+                            control,
+                            sourceRow[key] == null ? '' : sourceRow[key]
+                        );
+                    }
+                });
+            });
+        }
+
+        async applyJiguiCopyWithoutDiagnostics(
+            panel,
+            doc,
+            session,
+            runToken
+        ) {
+            const template = session.template;
+            const schema = this.getJiguiCopySchema(template);
+            let pending = schema.slice();
+            await this.waitForCopyDomStable(doc);
+            if (!this.isCopyRunCurrent(session, runToken)) return;
+            for (let pass = 0; pass < 3 && pending.length; pass += 1) {
+                const passBeforeCount = pending.length;
+                const nextPending = [];
+                let passApplied = 0;
+                for (const definition of pending) {
+                    if (this.verifyCopySchemaField(doc, definition)) {
+                        continue;
+                    }
+                    const result = await this.applyCopySchemaField(
+                        doc,
+                        definition,
+                        pass === 0 ? 350 : 700
+                    );
+                    if (!this.isCopyRunCurrent(session, runToken)) return;
+                    if (result.status === 'applied') passApplied += 1;
+                    else nextPending.push(definition);
+                }
+                pending = nextPending;
+                if (!pending.length) break;
+                await this.waitForCopyDomStable(
+                    doc,
+                    passApplied ? 240 : 420,
+                    passApplied ? 1800 : 900
+                );
+                if (!this.isCopyRunCurrent(session, runToken)) return;
+                if (
+                    pass >= 1
+                    && passBeforeCount - nextPending.length === 0
+                ) break;
+            }
+            await this.applyCopiedJiguiRelationRows(
+                doc,
+                template.relationRows
+            );
+            if (!this.isCopyRunCurrent(session, runToken)) return;
+            if (
+                Array.isArray(template.distributionDepartments)
+                && template.distributionDepartments.length
+            ) {
+                await this.applyDistributionDepartments(
+                    doc,
+                    template.distributionDepartments
+                );
+                if (!this.isCopyRunCurrent(session, runToken)) return;
+            }
+            session.completed = true;
+            this.showNoticeCopyStatus(
+                panel,
+                '填写完成，请仔细核对后提交!',
+                'success'
+            );
+            this.noticeCopySession = null;
+        }
+
+        async applyNoticeCopyWithoutDiagnostics(
+            panel,
+            doc,
+            session,
+            runToken
+        ) {
+            const template = session.template;
+            const resultMap = new Map();
+            const createNoticeType = this.getCreateNoticeType(
+                template.noticeType
+            );
+            const typeResult = await this.applyCopySelect(
+                doc,
+                ['通知单类型', '通知类型'],
+                createNoticeType,
+                true
+            );
+            if (!this.isCopyRunCurrent(session, runToken)) return;
+            resultMap.set('noticeType', {
+                ...typeResult,
+                label: '通知单类型'
+            });
+            await this.waitForCopyDomStable(doc);
+            if (!this.isCopyRunCurrent(session, runToken)) return;
+
+            const schema = this.getNoticeCopySchema(template);
+            let pending = schema.slice();
+            for (let pass = 0; pass < 5 && pending.length; pass += 1) {
+                const passBeforeCount = pending.length;
+                const nextPending = [];
+                let passApplied = 0;
+                for (const definition of pending) {
+                    if (this.verifyCopySchemaField(doc, definition)) {
+                        resultMap.set(definition.key, {
+                            status: 'applied',
+                            label: definition.label,
+                            type: 'existing'
+                        });
+                        continue;
+                    }
+                    const result = await this.applyCopySchemaField(
+                        doc,
+                        definition,
+                        pass === 0 ? 350 : 700
+                    );
+                    if (!this.isCopyRunCurrent(session, runToken)) return;
+                    resultMap.set(definition.key, result);
+                    if (result.status === 'applied') {
+                        passApplied += 1;
+                    } else {
+                        nextPending.push(definition);
+                    }
+                }
+                pending = nextPending;
+                if (!pending.length) break;
+                await this.waitForCopyDomStable(
+                    doc,
+                    passApplied ? 240 : 420,
+                    passApplied ? 1800 : 900
+                );
+                if (!this.isCopyRunCurrent(session, runToken)) return;
+                const completedThisPass =
+                    passBeforeCount - nextPending.length;
+                if (pass >= 1 && completedThisPass === 0) break;
+            }
+
+            schema.forEach((definition) => {
+                if (this.verifyCopySchemaField(doc, definition)) {
+                    const existing = resultMap.get(definition.key) || {};
+                    resultMap.set(definition.key, {
+                        ...existing,
+                        status: 'applied',
+                        label: definition.label
+                    });
+                } else if (definition.optional) {
+                    resultMap.delete(definition.key);
+                } else {
+                    const previous = resultMap.get(definition.key) || {};
+                    resultMap.set(definition.key, {
+                        ...previous,
+                        status: 'failed',
+                        label: definition.label
+                    });
+                }
+            });
+
+            if (
+                this.getCopyPolarity(template.fields.needMaterial)
+                    === 'positive'
+            ) {
+                const materialResult = await this.applyCopiedMaterialRows(
+                    doc,
+                    template.materialRows,
+                    'add'
+                );
+                if (!this.isCopyRunCurrent(session, runToken)) return;
+                resultMap.set('materialRows', materialResult);
+                if (
+                    Array.isArray(template.cancelMaterialRows)
+                    && template.cancelMaterialRows.length
+                ) {
+                    const cancelMaterialResult =
+                        await this.applyCopiedMaterialRows(
+                            doc,
+                            template.cancelMaterialRows,
+                            'cancel'
+                        );
+                    if (!this.isCopyRunCurrent(session, runToken)) return;
+                    resultMap.set(
+                        'cancelMaterialRows',
+                        cancelMaterialResult
+                    );
+                }
+            }
+
+            if (
+                Array.isArray(template.distributionDepartments)
+                && template.distributionDepartments.length
+            ) {
+                const distributionResult =
+                    await this.applyDistributionDepartments(
+                        doc,
+                        template.distributionDepartments
+                    );
+                if (!this.isCopyRunCurrent(session, runToken)) return;
+                resultMap.set(
+                    'distributionDepartments',
+                    distributionResult
+                );
+            }
+
+            session.completed = true;
+            this.showNoticeCopyStatus(
+                panel,
+                '填写完成，请仔细核对后提交!',
+                'success'
+            );
+            this.noticeCopySession = null;
+        }
+
+        async applyNoticeCopyTemplate(panel, doc, session, runToken) {
+            if (session.copyModule === 'jigui') {
+                return this.applyJiguiCopyWithoutDiagnostics(
+                    panel,
+                    doc,
+                    session,
+                    runToken
+                );
+            }
+            return this.applyNoticeCopyWithoutDiagnostics(
+                panel,
+                doc,
+                session,
+                runToken
+            );
         }
 
         getTodoDetailModule(url) {
@@ -1745,9 +5119,22 @@
             const checkValue = this.extractLabelValue(iframeDoc, ['校核']);
             const countersignValue = this.extractLabelValue(iframeDoc, ['会签', '项目部会签']);
             const approveValue = this.extractLabelValue(iframeDoc, ['批准']);
-            if (!checkValue || /未校核|待校核/.test(checkValue)) return '待校核';
-            if (countersignValue && /未会签|待会签/.test(countersignValue)) return '待会签';
-            if (!approveValue || /未批准|待批准/.test(approveValue)) return '待批准';
+            const normalizeStatus = (value) => String(value || '')
+                .replace(/\u00a0/g, '')
+                .replace(/\s+/g, '')
+                .trim();
+            const normalizedCheck = normalizeStatus(checkValue);
+            const normalizedCountersign = normalizeStatus(countersignValue);
+            const normalizedApprove = normalizeStatus(approveValue);
+            if (!normalizedCheck || /未校核|待校核/.test(normalizedCheck)) return '待校核';
+            if (
+                normalizedCountersign
+                && /未会签|待会签/.test(normalizedCountersign)
+            ) return '待会签';
+            if (
+                !normalizedApprove
+                || /未批准|待批准/.test(normalizedApprove)
+            ) return '待批准';
             return '待校核';
         }
 
@@ -2065,15 +5452,18 @@
                 || !this.tasks.length
             ) return;
             const checkValue = this.extractLabelValue(iframeDoc, ['校核']);
-            const countersignValue = this.extractLabelValue(iframeDoc, ['会签', '项目部会签']);
             const approveValue = this.extractLabelValue(iframeDoc, ['批准']);
             const isCompletedValue = (value, pendingWords) => {
-                const normalized = (value || '').trim();
-                return !!normalized && !pendingWords.some((word) => normalized.includes(word));
+                const normalized = String(value || '')
+                    .replace(/\u00a0/g, '')
+                    .replace(/\s+/g, '')
+                    .trim();
+                return !!normalized && !pendingWords.some((word) =>
+                    normalized.includes(String(word).replace(/\s+/g, ''))
+                );
             };
             const completedTypes = new Set();
             if (isCompletedValue(checkValue, ['未校核', '待校核'])) completedTypes.add('待校核');
-            if (isCompletedValue(countersignValue, ['未会签', '待会签'])) completedTypes.add('待会签');
             if (isCompletedValue(approveValue, ['未批准', '待批准'])) completedTypes.add('待批准');
             if (!completedTypes.size) return;
 
@@ -3549,7 +6939,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
- 
+
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -3937,6 +7327,8 @@
                 <div class="detail-header" style="background: rgb(30, 80, 220); color: white; height: 40px; padding: 0; border-radius: 0; display: flex; justify-content: space-between; align-items: center; cursor: move; min-height: 40px; box-sizing: border-box;">
                     <span class="detail-title" style="font-weight: bold; line-height: 1; display: flex; align-items: center; padding-left: 0; margin-left: -8px;">📄 ${titleText || '详情页面'}</span>
                     <div style="display: flex; align-items: center; gap: 0; height: 100%; margin-right: -6px;">
+                        <button class="detail-take-no-btn" type="button" title="打开取号页面" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">去取号</button>
+                        <button class="detail-copy-notice-btn" type="button" title="按当前内容复制开单" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">复制开单</button>
                         <button class="detail-todo-btn" type="button" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">通知待办</button>
                         <button class="detail-minimize-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; margin-right: 4px; transition: background-color 0.2s; line-height: 1;">
                             <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
@@ -4158,6 +7550,7 @@
                 // 尝试滚动到弹窗位置
                 detailPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }, 100);
+            return panelId;
         }
 
         // 将窗口置顶
@@ -4874,6 +8267,8 @@
                 return;
             }
 
+            // 创建通知单页面的“去取号”无需等待 iframe 加载，弹层生成后立即显示。
+            this.todoManager.updateTakeNoButton(panel, fullUrl);
             console.log('加载详情页面，URL:', fullUrl);
 
             // 移除之前的 load 事件监听器（如果存在）
@@ -4886,15 +8281,13 @@
             // 添加新的 load 事件监听器，用于检测"浏览附件"链接
             const handlerName = `iframeLoadHandler_${panelId}`;
             const loadHandler = () => {
-                // 延迟执行，确保 iframe 内容完全加载
-                setTimeout(() => {
-                    try {
-                        // 尝试访问 iframe 内容（同域情况下）
-                        const iframeDoc = contentIframe.contentDocument || contentIframe.contentWindow?.document;
-                        if (!iframeDoc) {
-                            // 跨域情况，无法直接访问内容
-                            return;
-                        }
+                try {
+                    // load 事件触发时同域文档已可读取，无需再额外等待。
+                    const iframeDoc = contentIframe.contentDocument || contentIframe.contentWindow?.document;
+                    if (!iframeDoc) {
+                        // 跨域情况，无法直接访问内容
+                        return;
+                    }
 
                         // 通知单详情页显示“通知待办”，并根据原系统校核/批准字段同步完成状态。
                         this.todoManager.handleDetailLoaded(panel, contentIframe, iframeDoc, fullUrl);
@@ -5280,11 +8673,10 @@
                                 }
                             });
                         }
-                    } catch (e) {
-                        // 跨域或其他错误，忽略
-                        console.log('无法访问 iframe 内容（可能是跨域）:', e.message);
-                    }
-                }, 500); // 延迟 500ms，确保内容完全加载
+                } catch (e) {
+                    // 跨域或其他错误，忽略
+                    console.log('无法访问 iframe 内容（可能是跨域）:', e.message);
+                }
             };
 
             // 保存处理器引用
