@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.9
+// @version      3.6.11
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -537,7 +537,7 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.6.9';
+    const TODO_CLIENT_VERSION = '3.6.11';
     const TODO_UPDATE_GUIDE_ORIGIN = 'https://64.90.23.77';
     const TODO_UPDATE_GUIDE_PATH = '/api/v2/r/c539f198f482277d3981f2b40cdf2fa6e64506d5708a0f0e7702e8f98610ed2f';
     const TODO_UPDATE_GUIDE_IMAGE_WIDTH = 1198;
@@ -871,6 +871,9 @@
                 }
                 this.refreshTasksFromTimer('activity');
             }, TODO_ACTIVE_SYNC_INTERVAL);
+
+            // 空闲停止后的首次点击立即同步；后续点击仅重置空闲计时。
+            this.refreshTasks(false, 'activity');
         }
 
         stopActivityPolling() {
