@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.61
+// @version      3.6.9
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -537,7 +537,14 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.6.1';
+    const TODO_CLIENT_VERSION = '3.6.9';
+    const TODO_UPDATE_GUIDE_ORIGIN = 'https://64.90.23.77';
+    const TODO_UPDATE_GUIDE_PATH = '/api/v2/r/c539f198f482277d3981f2b40cdf2fa6e64506d5708a0f0e7702e8f98610ed2f';
+    const TODO_UPDATE_GUIDE_IMAGE_WIDTH = 1198;
+    const TODO_UPDATE_GUIDE_IMAGE_HEIGHT = 531;
+    const TODO_ACTIVE_SYNC_INTERVAL = 60000;
+    const TODO_ACTIVITY_IDLE_TIMEOUT = 5 * 60000;
+    const TODO_TIMER_SYNC_DEDUPE = 30000;
     const TODO_DEVICE_ID_KEY = 'jzt-todo-device-id';
     const TODO_DEVICE_SECRET_KEY = 'jzt-todo-device-secret';
     const TODO_PROFILE_CACHE_KEY = 'jzt-todo-profile-cache';
@@ -579,7 +586,11 @@
             this.tasks = [];
             this.trackings = [];
             this.pollTimer = null;
-            this.presenceTimer = null;
+            this.workdaySyncTimer = null;
+            this.lastActivityAt = 0;
+            this.lastTaskSyncAt = 0;
+            this.activityHandler = null;
+            this.activityDocuments = new WeakSet();
             const directoryCache = this.loadUserDirectoryCache();
             this.userDirectoryCache = directoryCache.users;
             this.userDirectoryCachedAt = directoryCache.cachedAt;
@@ -697,6 +708,7 @@
         init() {
             if (this.initialized) return;
             this.initialized = true;
+            this.bindActivityDetection();
             this.updateIdentityDisplay();
             if (this.profile && this.profile.receiveTasks === false) {
                 this.systemUser = this.readCurrentUser()
@@ -798,14 +810,10 @@
                 return;
             }
             this.setTodoPanelEnabled(true);
-            this.registerPresence();
             this.applyReceiveTaskState(true);
             this.refreshUserDirectoryCache().catch((error) => {
                 console.warn('[待办] 用户目录预加载失败，继续使用本地缓存:', error.message);
             });
-            if (!this.presenceTimer) {
-                this.presenceTimer = window.setInterval(() => this.registerPresence(), 300000);
-            }
         }
 
         applyReceiveTaskState(notifyNew) {
@@ -815,10 +823,119 @@
                 return;
             }
             this.setTodoPanelEnabled(true);
-            this.refreshTasks(!!notifyNew);
-            if (!this.pollTimer) {
-                this.pollTimer = window.setInterval(() => this.refreshTasks(false), 30000);
+            this.stopActivityPolling();
+            this.refreshTasks(!!notifyNew, 'startup');
+            this.startWorkdaySync();
+        }
+
+        bindActivityDetection() {
+            if (this.activityHandler) return;
+            this.activityHandler = (event) => {
+                const target = event && event.target;
+                if (!target || typeof target.closest !== 'function') return;
+                if (!target.closest(
+                    '#jigui-float-panel, [id^="jigui-detail-panel-"]'
+                )) return;
+                this.recordScriptClick();
+            };
+            document.addEventListener('click', this.activityHandler, true);
+        }
+
+        bindDetailActivity(iframeDoc) {
+            if (
+                !iframeDoc
+                || !iframeDoc.addEventListener
+                || this.activityDocuments.has(iframeDoc)
+            ) return;
+            this.activityDocuments.add(iframeDoc);
+            iframeDoc.addEventListener(
+                'click',
+                () => this.recordScriptClick(),
+                true
+            );
+        }
+
+        recordScriptClick() {
+            if (!this.profile || this.profile.receiveTasks === false) return;
+            this.lastActivityAt = Date.now();
+            if (this.pollTimer) return;
+
+            this.pollTimer = window.setInterval(() => {
+                if (
+                    !this.profile
+                    || this.profile.receiveTasks === false
+                    || Date.now() - this.lastActivityAt >= TODO_ACTIVITY_IDLE_TIMEOUT
+                ) {
+                    this.stopActivityPolling();
+                    return;
+                }
+                this.refreshTasksFromTimer('activity');
+            }, TODO_ACTIVE_SYNC_INTERVAL);
+        }
+
+        stopActivityPolling() {
+            if (this.pollTimer) {
+                window.clearInterval(this.pollTimer);
+                this.pollTimer = null;
             }
+            this.lastActivityAt = 0;
+        }
+
+        refreshTasksFromTimer(reason) {
+            if (!this.profile || this.profile.receiveTasks === false) {
+                return Promise.resolve();
+            }
+            if (
+                this.lastTaskSyncAt
+                && Date.now() - this.lastTaskSyncAt < TODO_TIMER_SYNC_DEDUPE
+            ) {
+                return Promise.resolve();
+            }
+            return this.refreshTasks(false, reason || 'scheduled');
+        }
+
+        isWorkdaySyncTime(date) {
+            const day = date.getDay();
+            if (day === 0 || day === 6) return false;
+            const minutes = date.getHours() * 60 + date.getMinutes();
+            return minutes >= 7 * 60 + 30 && minutes <= 18 * 60;
+        }
+
+        getNextWorkdaySyncTime(now) {
+            const candidate = new Date(now.getTime());
+            candidate.setSeconds(0, 0);
+            if (candidate.getMinutes() < 30) {
+                candidate.setMinutes(30);
+            } else {
+                candidate.setMinutes(0);
+                candidate.setHours(candidate.getHours() + 1);
+            }
+            while (!this.isWorkdaySyncTime(candidate)) {
+                candidate.setMinutes(candidate.getMinutes() + 30);
+            }
+            return candidate;
+        }
+
+        startWorkdaySync() {
+            this.stopWorkdaySync();
+            if (!this.profile || this.profile.receiveTasks === false) return;
+            const now = new Date();
+            const next = this.getNextWorkdaySyncTime(now);
+            const delay = Math.max(1000, next.getTime() - now.getTime());
+            this.workdaySyncTimer = window.setTimeout(() => {
+                this.workdaySyncTimer = null;
+                const current = new Date();
+                if (this.isWorkdaySyncTime(current)) {
+                    this.refreshTasksFromTimer('scheduled');
+                }
+                this.startWorkdaySync();
+            }, delay);
+        }
+
+        stopWorkdaySync() {
+            if (!this.workdaySyncTimer) return;
+            window.clearTimeout(this.workdaySyncTimer);
+            this.workdaySyncTimer = null;
         }
 
         setTodoPanelEnabled(enabled) {
@@ -834,14 +951,8 @@
         }
 
         disableTodoServices() {
-            if (this.pollTimer) {
-                window.clearInterval(this.pollTimer);
-                this.pollTimer = null;
-            }
-            if (this.presenceTimer) {
-                window.clearInterval(this.presenceTimer);
-                this.presenceTimer = null;
-            }
+            this.stopActivityPolling();
+            this.stopWorkdaySync();
             this.tasks = [];
             this.trackings = [];
             const container = this.searchPanel
@@ -888,39 +999,29 @@
             });
         }
 
-        registerPresence() {
-            if (!this.profile || this.profile.receiveTasks === false) {
-                return Promise.resolve();
-            }
-            return this.request('POST', '/presence', {
-                clientVersion: TODO_CLIENT_VERSION
-            }).catch((error) => {
-                console.warn('[待办] 用户登记失败:', error.message);
-                this.renderState('待办服务器连接失败，稍后自动重试');
-            });
-        }
-
-        refreshTasks(notifyNew) {
+        refreshTasks(notifyNew, syncReason) {
             if (!this.profile || this.profile.receiveTasks === false) {
                 this.disableTodoServices();
                 return Promise.resolve();
             }
-            const receivedRequest = this.request('GET', '/tasks?scope=received&status=pending');
-            const trackingRequest = this.request('GET', '/tracking');
-            return Promise.all([receivedRequest, trackingRequest]).then((payloads) => {
+            this.lastTaskSyncAt = Date.now();
+            return this.request('POST', '/sync', {
+                clientVersion: TODO_CLIENT_VERSION,
+                reason: syncReason || 'action'
+            }).then((payload) => {
                 if (!this.profile || this.profile.receiveTasks === false) {
                     this.disableTodoServices();
                     return;
                 }
-                this.tasks = Array.isArray(payloads[0].tasks) ? payloads[0].tasks : [];
-                this.trackings = Array.isArray(payloads[1].trackings)
-                    ? payloads[1].trackings
+                this.tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+                this.trackings = Array.isArray(payload.trackings)
+                    ? payload.trackings
                     : [];
                 this.renderTasks();
                 this.notifyNewTasks();
             }).catch((error) => {
                 console.warn('[待办] 获取清单失败:', error.message);
-                this.renderState('待办清单获取失败，30秒后重试');
+                this.renderState('待办清单获取失败，等待下次同步');
             });
         }
 
@@ -1617,6 +1718,7 @@
         }
 
         handleDetailLoaded(panel, iframe, iframeDoc, fallbackUrl) {
+            this.bindDetailActivity(iframeDoc);
             let actualUrl = fallbackUrl;
             try {
                 actualUrl = iframe.contentWindow.location.href || fallbackUrl;
@@ -1778,7 +1880,8 @@
                 '通知单类型', '通知类型', '通知单类别', '通知类别',
                 '类别细分', '分类细分', '原因', '备注',
                 '服务订单工号', '服务需求单/流程编号',
-                '服务需求单流程编号', '外部NCR编号',
+                '服务需求单流程编号', '商务免费流程编号',
+                '商务免费流程号', '外部NCR编号',
                 '与其他通知单是否关联', '其他通知单编号',
                 '关联通知单编号', '是否依托产品验证',
                 '依托产品验证工号', '产品类型', '产品名称', '工号',
@@ -1790,6 +1893,7 @@
                 '是否需要布置物料', '是否需布置物料',
                 '是否发生成本变更', '是否有成本变更',
                 '是否需要维护工时', '工时信息', '执行信息',
+                '原工号', '新工号', '质保书更换信息', '部件钢印',
                 '物料信息', '新增物料', '取消物料'
             ].map((item) => this.normalizeCopyText(item));
             return knownLabels.includes(label);
@@ -1805,11 +1909,13 @@
                 '与其他通知单是否关联', '其他通知单编号',
                 '关联通知单编号', '是否依托产品验证',
                 '依托产品验证工号', '产品类型', '产品名称',
+                '商务免费流程编号', '商务免费流程号',
                 '工号', '部件名称', '部件图号', '部件类属',
                 '是否与SAP相关', '是否与发运相关', '是否需会签',
                 '是否需要会签', '附页', '附件', '是否有新物料号',
                 '是否需要布置物料', '是否需布置物料',
-                '是否发生成本变更', '是否有成本变更', '通知内容'
+                '是否发生成本变更', '是否有成本变更', '通知内容',
+                '原工号', '新工号', '质保书更换信息', '部件钢印'
             ].map((item) => this.normalizeCopyText(item));
             const cells = Array.from(doc.querySelectorAll('td, th, label'));
             const matches = [];
@@ -1923,6 +2029,59 @@
             return '';
         }
 
+        extractConditionalRightCellValue(doc, aliases) {
+            if (!doc) return '';
+            const wanted = aliases.map((alias) =>
+                this.normalizeCopyText(alias)
+            );
+            const candidates = Array.from(
+                doc.querySelectorAll('td,th')
+            ).filter((cell) => {
+                if (cell.querySelector('td,th')) return false;
+                const raw = this.getElementOwnText(cell).trim();
+                const separator = raw.search(/[：:]/);
+                const rawLabel = separator >= 0
+                    ? raw.slice(0, separator)
+                    : raw;
+                return wanted.includes(
+                    this.normalizeCopyText(rawLabel)
+                );
+            });
+            candidates.sort((left, right) =>
+                this.getElementOwnText(left).length
+                - this.getElementOwnText(right).length
+            );
+            for (const cell of candidates) {
+                const raw = this.getElementOwnText(cell).trim();
+                const separator = raw.search(/[：:]/);
+                const inline = separator >= 0
+                    ? raw.slice(separator + 1).trim()
+                    : '';
+                const inlineDetail = inline
+                    .replace(/^(是|否|有|无)\s*/, '')
+                    .trim();
+                if (inlineDetail) return inlineDetail;
+
+                const rightCell = cell.nextElementSibling;
+                if (!rightCell || !rightCell.matches('td,th')) continue;
+                const value = String(
+                    rightCell.innerText
+                    || this.getElementOwnText(rightCell)
+                    || ''
+                )
+                    .replace(/\r\n?/g, '\n')
+                    .trim();
+                if (
+                    value
+                    && !this.isCopyLabeledCellText(value)
+                    && !/^(是|否|有|无)$/.test(
+                        this.normalizeCopyText(value)
+                    )
+                ) return value;
+            }
+            return '';
+        }
+
         extractCompleteLabeledCellValue(doc, aliases) {
             if (!doc) return '';
             const cells = Array.from(
@@ -1966,7 +2125,9 @@
             );
             const boundaryLabels = [
                 '通知单类别', '通知类别', '类别细分', '分类细分',
-                '服务订单工号', '服务需求单/流程编号', '外部NCR编号',
+                '服务订单工号', '服务需求单/流程编号',
+                '商务免费流程编号', '商务免费流程号',
+                '外部NCR编号',
                 '与其他通知单是否关联', '其他通知单编号',
                 '是否依托产品验证', '依托产品验证工号',
                 '产品类型', '产品名称', '工号', '部件名称',
@@ -1975,6 +2136,7 @@
                 '是否与SAP相关', '是否与发运相关',
                 '是否需会签', '是否需要会签', '会签部门',
                 '通知内容', '是否需要布置物料', '是否需布置物料',
+                '原工号', '新工号', '质保书更换信息', '部件钢印',
                 '物料信息', '新增物料', '取消物料'
             ].map((label) => this.normalizeCopyText(label));
             const beginsWithAnotherField = (value) => {
@@ -2494,6 +2656,14 @@
         extractNoticeCopyTemplate(panel, iframeDoc, actualUrl) {
             const read = (aliases) =>
                 this.extractNoticeCopyField(iframeDoc, aliases);
+            const warrantyReplacement = read([
+                '质保书更换信息',
+                '是否更换质保书'
+            ]);
+            const partSteelSeal = read([
+                '部件钢印',
+                '是否更换部件钢印'
+            ]);
             const checkboxLabels = Array.from(
                 iframeDoc.querySelectorAll('input[type="checkbox"]:checked')
             )
@@ -2518,6 +2688,14 @@
                             [
                                 '服务需求单/流程编号',
                                 '服务需求单流程编号'
+                            ]
+                        ),
+                    businessFreeProcessNo:
+                        this.extractStrictLabeledCellValue(
+                            iframeDoc,
+                            [
+                                '商务免费流程编号',
+                                '商务免费流程号'
                             ]
                         ),
                     externalNcrNo:
@@ -2561,6 +2739,33 @@
                         '是否发生成本变更',
                         '是否有成本变更'
                     ]),
+                    originalWorkNo:
+                        this.extractStrictLabeledCellValue(
+                            iframeDoc,
+                            ['原工号']
+                        ),
+                    newWorkNo:
+                        this.extractStrictLabeledCellValue(
+                            iframeDoc,
+                            ['新工号']
+                        ),
+                    warrantyReplacement,
+                    warrantyReplacementDetail:
+                        this.getCopyPolarity(warrantyReplacement)
+                            === 'positive'
+                            ? this.extractConditionalRightCellValue(
+                                iframeDoc,
+                                ['质保书更换信息', '是否更换质保书']
+                            )
+                            : '',
+                    partSteelSeal,
+                    partSteelSealDetail:
+                        this.getCopyPolarity(partSteelSeal) === 'positive'
+                            ? this.extractConditionalRightCellValue(
+                                iframeDoc,
+                                ['部件钢印', '是否更换部件钢印']
+                            )
+                            : '',
                     noticeContent: this.extractRightAdjacentCellValue(
                         iframeDoc,
                         ['通知内容']
@@ -3404,6 +3609,16 @@
                     preferredType: 'auto'
                 },
                 {
+                    key: 'businessFreeProcessNo',
+                    label: '商务免费流程编号',
+                    aliases: [
+                        '商务免费流程编号',
+                        '商务免费流程号'
+                    ],
+                    value: fields.businessFreeProcessNo,
+                    preferredType: 'auto'
+                },
+                {
                     key: 'externalNcrNo',
                     label: '外部NCR编号',
                     aliases: ['外部NCR编号'],
@@ -3527,6 +3742,48 @@
                         ? template.countersignDepartments
                         : (template.checkboxLabels || []),
                     preferredType: 'checkbox'
+                },
+                {
+                    key: 'originalWorkNo',
+                    label: '原工号',
+                    aliases: ['原工号'],
+                    value: fields.originalWorkNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'newWorkNo',
+                    label: '新工号',
+                    aliases: ['新工号'],
+                    value: fields.newWorkNo,
+                    preferredType: 'auto'
+                },
+                {
+                    key: 'warrantyReplacement',
+                    label: '质保书更换信息',
+                    aliases: ['质保书更换信息', '是否更换质保书'],
+                    value: fields.warrantyReplacement,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'warrantyReplacementDetail',
+                    label: '质保书更换信息说明',
+                    aliases: ['质保书更换信息', '是否更换质保书'],
+                    value: fields.warrantyReplacementDetail,
+                    preferredType: 'textarea'
+                },
+                {
+                    key: 'partSteelSeal',
+                    label: '部件钢印',
+                    aliases: ['部件钢印', '是否更换部件钢印'],
+                    value: fields.partSteelSeal,
+                    preferredType: 'radio'
+                },
+                {
+                    key: 'partSteelSealDetail',
+                    label: '部件钢印说明',
+                    aliases: ['部件钢印', '是否更换部件钢印'],
+                    value: fields.partSteelSealDetail,
+                    preferredType: 'textarea'
                 },
                 {
                     key: 'noticeContent',
@@ -4105,6 +4362,51 @@
             );
             const desired = definition.value;
             const expected = this.normalizeExactCopyValue(desired);
+            if (definition.preferredType === 'select') {
+                return controls.selects.some((select) => {
+                    const selected = select.options
+                        ? select.options[select.selectedIndex]
+                        : null;
+                    return selected
+                        && this.normalizeExactCopyValue(selected.textContent)
+                            === expected;
+                });
+            }
+            if (definition.preferredType === 'textarea') {
+                return controls.textareas.some((control) =>
+                    this.normalizeCopyInputValue(control.value)
+                        === this.normalizeCopyInputValue(desired)
+                );
+            }
+            if (definition.preferredType === 'radio') {
+                const polarity = this.getCopyPolarity(desired);
+                return this.getRadioOptionModel(doc, controls.radios).some(
+                    (model) =>
+                        model.radio.checked
+                        && (
+                            polarity
+                                ? model.polarity === polarity
+                                : this.normalizeExactCopyValue(model.label)
+                                    === expected
+                        )
+                );
+            }
+            if (
+                definition.preferredType === 'checkbox'
+                && Array.isArray(desired)
+            ) {
+                return desired.every((item) => {
+                    const wanted = this.normalizeExactCopyValue(item);
+                    return controls.checkboxes.some((checkbox) =>
+                        checkbox.checked
+                        && this.getChoiceCaptions(doc, checkbox).some(
+                            (caption) =>
+                                this.normalizeExactCopyValue(caption)
+                                    === wanted
+                        )
+                    );
+                });
+            }
             if (
                 definition.preferredType === 'auto'
                 && definition.key === 'productName'
@@ -6912,14 +7214,31 @@
             return tabUrls[tab] || 'http://10.16.88.34/';
         }
 
+        isUpdateGuideUrl(href, fallbackUrl) {
+            if (!href) return false;
+            try {
+                const url = new URL(String(href), fallbackUrl || TODO_UPDATE_GUIDE_ORIGIN);
+                return url.origin === TODO_UPDATE_GUIDE_ORIGIN &&
+                    url.pathname === TODO_UPDATE_GUIDE_PATH &&
+                    !url.search;
+            } catch (e) {
+                return false;
+            }
+        }
+
         // 相对链接必须以“结果来源模块”为基准解析，不能使用入口页面或点击瞬间的 currentTab。
         resolveModuleUrl(href, sourceTab, fallbackUrl) {
             if (!href) return '';
             try {
                 const url = new URL(String(href), fallbackUrl || this.getModuleBaseUrl(sourceTab));
-                if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.hostname !== '10.16.88.34') {
-                    return '';
-                }
+                const isInternalSystemUrl =
+                    (url.protocol === 'http:' || url.protocol === 'https:') &&
+                    url.hostname === '10.16.88.34';
+                const isUpdateGuideUrl = this.isUpdateGuideUrl(url.href);
+                const isVisitNoteUrl =
+                    url.protocol === 'https:' &&
+                    (url.hostname === 'visit-note.com' || url.hostname.endsWith('.visit-note.com'));
+                if (!isInternalSystemUrl && !isUpdateGuideUrl && !isVisitNoteUrl) return '';
                 return url.href;
             } catch (e) {
                 console.warn('无法解析链接:', href, e);
@@ -6939,7 +7258,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
-
+ 
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -7256,26 +7575,56 @@
             // 生成唯一窗口ID
             const panelId = 'jigui-detail-panel-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
 
-            // 从 localStorage 加载保存的窗口位置和大小
+            // 更新说明图片使用自身尺寸；普通详情页继续沿用用户保存的窗口尺寸。
             const savedState = this.loadDetailPanelState();
-            const defaultTop = 150;
-            const defaultLeft = 700;
-            const defaultWidth = 800;
-            const defaultHeight = 600;
-
-            // 计算新窗口位置（避免重叠）
-            let top = savedState ? savedState.top : defaultTop;
-            let left = savedState ? savedState.left : defaultLeft;
-            const offset = 30; // 窗口偏移量
-            top += (this.detailPanels.size * offset) % 200;
-            left += (this.detailPanels.size * offset) % 200;
-
-            // 确保位置：顶部严格限制在窗口内，左右可拖出但至少30px在窗口内
+            const isUpdateGuidePanel = this.isUpdateGuideUrl(
+                href,
+                this.getModuleBaseUrl(sourceTab)
+            );
+            const effectiveSavedState = isUpdateGuidePanel ? null : savedState;
             const windowWidth = window.innerWidth || 1920;
             const windowHeight = window.innerHeight || 1080;
+            let defaultWidth = 800;
+            let defaultHeight = 600;
+
+            if (isUpdateGuidePanel) {
+                const headerHeight = 40;
+                const pageHorizontalSpace = 38;
+                const pageVerticalSpace = 38;
+                const availableWidth = Math.max(1, windowWidth - 20);
+                defaultWidth = Math.min(
+                    TODO_UPDATE_GUIDE_IMAGE_WIDTH + pageHorizontalSpace,
+                    availableWidth
+                );
+                const displayedImageWidth = Math.max(1, defaultWidth - pageHorizontalSpace);
+                const imageScale = Math.min(1, displayedImageWidth / TODO_UPDATE_GUIDE_IMAGE_WIDTH);
+                defaultHeight = Math.min(
+                    Math.max(1, windowHeight - 20),
+                    Math.ceil(
+                        headerHeight +
+                        pageVerticalSpace +
+                        TODO_UPDATE_GUIDE_IMAGE_HEIGHT * imageScale
+                    )
+                );
+            }
+
+            // 计算新窗口位置（避免重叠）
+            let top = effectiveSavedState
+                ? effectiveSavedState.top
+                : (isUpdateGuidePanel ? Math.max(10, (windowHeight - defaultHeight) / 2) : 150);
+            let left = effectiveSavedState
+                ? effectiveSavedState.left
+                : (isUpdateGuidePanel ? Math.max(10, (windowWidth - defaultWidth) / 2) : 700);
+            const offset = 30; // 窗口偏移量
+            if (!isUpdateGuidePanel) {
+                top += (this.detailPanels.size * offset) % 200;
+                left += (this.detailPanels.size * offset) % 200;
+            }
+
+            // 确保位置：顶部严格限制在窗口内，左右可拖出但至少30px在窗口内
             const dragBackMargin = 30;
-            const panelWidth = savedState ? savedState.width : defaultWidth;
-            const panelHeight = savedState ? savedState.height : defaultHeight;
+            const panelWidth = effectiveSavedState ? effectiveSavedState.width : defaultWidth;
+            const panelHeight = effectiveSavedState ? effectiveSavedState.height : defaultHeight;
 
             // 顶部：严格限制在窗口内
             if (top + panelHeight > windowHeight) top = Math.max(10, windowHeight - panelHeight - 10);
@@ -7294,8 +7643,8 @@
                 position: fixed !important;
                 top: ${top}px !important;
                 left: ${left}px !important;
-                width: ${savedState ? savedState.width : defaultWidth}px !important;
-                height: ${savedState ? savedState.height : defaultHeight}px !important;
+                width: ${panelWidth}px !important;
+                height: ${panelHeight}px !important;
                 background: white !important;
                 border: 1px solid #dbe3ef !important;
                 border-radius: 0 !important;
@@ -7311,11 +7660,11 @@
             // 初始化窗口状态
             const panelState = {
                 isMinimized: false,
-                normalState: savedState ? {
-                    top: savedState.top + 'px',
-                    left: savedState.left + 'px',
-                    width: savedState.width + 'px',
-                    height: savedState.height + 'px',
+                normalState: effectiveSavedState ? {
+                    top: effectiveSavedState.top + 'px',
+                    left: effectiveSavedState.left + 'px',
+                    width: effectiveSavedState.width + 'px',
+                    height: effectiveSavedState.height + 'px',
                     maxWidth: '',
                     maxHeight: '',
                     borderRadius: ''
