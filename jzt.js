@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.11
+// @version      3.6.35
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -537,7 +537,7 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.6.11';
+    const TODO_CLIENT_VERSION = '3.6.35';
     const TODO_UPDATE_GUIDE_ORIGIN = 'https://64.90.23.77';
     const TODO_UPDATE_GUIDE_PATH = '/api/v2/r/c539f198f482277d3981f2b40cdf2fa6e64506d5708a0f0e7702e8f98610ed2f';
     const TODO_UPDATE_GUIDE_IMAGE_WIDTH = 1198;
@@ -3008,147 +3008,6 @@
             return results;
         }
 
-        openNoticeCopyDialog(template) {
-            const old = document.getElementById('jzt-notice-copy-overlay');
-            if (old) old.remove();
-
-            const overlay = document.createElement('div');
-            overlay.id = 'jzt-notice-copy-overlay';
-            overlay.style.cssText = [
-                'position:fixed',
-                'inset:0',
-                'z-index:320000',
-                'display:flex',
-                'align-items:center',
-                'justify-content:center',
-                'background:rgba(15,23,42,.45)',
-                'font-family:Microsoft YaHei,微软雅黑,sans-serif'
-            ].join(';');
-
-            const dialog = document.createElement('div');
-            dialog.id = 'jigui-detail-panel-notice-copy-dialog';
-            dialog.style.cssText = [
-                'width:430px',
-                'max-width:calc(100vw - 40px)',
-                'background:#fff9f1',
-                'border:1px solid #dbe3ef',
-                'border-radius:0',
-                'box-shadow:0 16px 40px rgba(15,23,42,.16)',
-                'overflow:hidden',
-                'box-sizing:border-box',
-                'font-size:15px',
-                'color:#334155'
-            ].join(';');
-            dialog.innerHTML = `
-                <div class="detail-header" style="background:rgb(30,80,220);color:#fff;height:40px;min-height:40px;padding:0;display:flex;align-items:center;justify-content:space-between;box-sizing:border-box;">
-                    <span class="detail-title" style="font-weight:700;line-height:1;display:flex;align-items:center;padding-left:0;margin-left:-8px;">📄 复制开单</span>
-                    <div style="display:flex;align-items:center;height:100%;margin-right:-6px;">
-                        <button type="button" data-action="close" title="关闭" aria-label="关闭" style="width:24px;height:24px;padding:0;margin:0;border:0;background:transparent;color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;">
-                            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                                <line x1="2.2" y1="2.2" x2="9.8" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
-                                <line x1="9.8" y1="2.2" x2="2.2" y2="9.8" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div style="padding:14px 18px 18px;background:#fff9f1;">
-                    <div style="margin-bottom:12px;line-height:22px;">
-                        来源通知单：<strong data-field="source-doc"></strong>
-                    </div>
-                    <label style="display:block;margin-bottom:13px;">
-                        新工号：
-                        <input data-field="new-job-no" type="text" maxlength="100" autocomplete="off" placeholder="请输入本次开单使用的新工号" style="display:block;width:100%;height:42px;box-sizing:border-box;margin-top:6px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#111827;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:15px;outline:none;">
-                    </label>
-                    <label style="display:block;margin-bottom:9px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;">
-                        <span style="display:flex;align-items:center;gap:8px;font-weight:700;">
-                            <input data-field="copy-part" type="checkbox" checked style="width:17px;height:17px;margin:0;">
-                            复制部件名称、图号等基础信息
-                        </span>
-                    </label>
-                    <label style="display:block;margin-bottom:9px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;">
-                        <span style="display:flex;align-items:center;gap:8px;font-weight:700;">
-                            <input data-field="copy-options" type="checkbox" checked style="width:17px;height:17px;margin:0;">
-                            复制部件类属、会签部门及其他选项
-                        </span>
-                    </label>
-                    <label style="display:block;margin-bottom:10px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;">
-                        <span style="display:flex;align-items:center;gap:8px;font-weight:700;">
-                            <input data-field="copy-content" type="checkbox" checked style="width:17px;height:17px;margin:0;">
-                            复制通知内容
-                        </span>
-                    </label>
-                    <div style="margin-bottom:12px;color:#b45309;font-size:12px;line-height:1.6;">
-                        不复制原编号、日期、填单人、审批状态和文件附件；自动填入后仍需人工核对并使用原系统提交。
-                    </div>
-                    <div data-field="status" style="min-height:18px;margin-bottom:8px;color:#dc2626;font-size:13px;"></div>
-                    <div style="display:flex;justify-content:flex-end;gap:10px;">
-                        <button type="button" data-action="cancel" style="padding:8px 18px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;">取消</button>
-                        <button type="button" data-action="start" style="padding:8px 18px;border:1px solid #1d4ed8;border-radius:4px;background:#2563eb;color:#fff;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;font-weight:700;">开始复制</button>
-                    </div>
-                </div>
-            `;
-            overlay.appendChild(dialog);
-            document.body.appendChild(overlay);
-
-            dialog.querySelector('[data-field="source-doc"]').textContent =
-                template.sourceDocNo || '未识别编号';
-            const jobInput = dialog.querySelector('[data-field="new-job-no"]');
-            const status = dialog.querySelector('[data-field="status"]');
-            const close = () => overlay.remove();
-            dialog.querySelector('[data-action="close"]').addEventListener(
-                'click',
-                close
-            );
-            dialog.querySelector('[data-action="cancel"]').addEventListener(
-                'click',
-                close
-            );
-            dialog.querySelector('[data-action="start"]').addEventListener(
-                'click',
-                () => {
-                    const newJobNo = jobInput.value.trim();
-                    if (!newJobNo) {
-                        status.textContent = '请输入新工号。';
-                        jobInput.focus();
-                        return;
-                    }
-                    this.noticeCopySession = {
-                        template,
-                        newJobNo,
-                        options: {
-                            copyPart: dialog.querySelector(
-                                '[data-field="copy-part"]'
-                            ).checked,
-                            copyOptions: dialog.querySelector(
-                                '[data-field="copy-options"]'
-                            ).checked,
-                            copyContent: dialog.querySelector(
-                                '[data-field="copy-content"]'
-                            ).checked
-                        },
-                        targetPanelId: '',
-                        runToken: 0,
-                        completed: false
-                    };
-                    close();
-                    const panelId = this.searchPanel.openDetailPanel(
-                        'http://10.16.88.34/notice/createnote.asp',
-                        '创建通知单',
-                        'tongzhi'
-                    );
-                    if (panelId && this.noticeCopySession) {
-                        this.noticeCopySession.targetPanelId = panelId;
-                    }
-                }
-            );
-            jobInput.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') {
-                    dialog.querySelector('[data-action="start"]').click();
-                }
-            });
-            window.setTimeout(() => jobInput.focus(), 30);
-        }
-
         showNoticeCopyStatus(panel, text, type) {
             let status = panel.querySelector('.notice-copy-progress');
             if (!status) {
@@ -3158,7 +3017,7 @@
                     'position:absolute',
                     'top:46px',
                     'right:28px',
-                    'z-index:20',
+                    'z-index:2147483646',
                     'width:auto',
                     'max-width:calc(100% - 56px)',
                     'box-sizing:border-box',
@@ -3176,6 +3035,23 @@
                 ].join(';');
                 panel.appendChild(status);
             }
+            // 每次更新提示均生成新代次；旧提示遗留的回调不得影响当前提示。
+            const statusGeneration =
+                (Number(status._jztStatusGeneration) || 0) + 1;
+            status._jztStatusGeneration = statusGeneration;
+            if (status._jztFadeTimer) {
+                window.clearTimeout(status._jztFadeTimer);
+                status._jztFadeTimer = null;
+            }
+            if (status._jztRemoveTimer) {
+                window.clearTimeout(status._jztRemoveTimer);
+                status._jztRemoveTimer = null;
+            }
+            status.style.setProperty('display', 'block', 'important');
+            status.style.setProperty('visibility', 'visible', 'important');
+            status.style.setProperty('z-index', '2147483646', 'important');
+            status.style.setProperty('transition', 'none', 'important');
+            status.style.setProperty('opacity', '1', 'important');
             const palette = type === 'success'
                 ? {
                     border: '#86efac',
@@ -3197,6 +3073,36 @@
             status.style.background = palette.background;
             status.style.color = palette.color;
             status.textContent = String(text || '');
+            // “内容填写中”等进行状态持续显示，等待后续成功或警告提示覆盖。
+            if (type === 'progress') {
+                status.dataset.jztStatusType = 'progress';
+                return;
+            }
+            status.dataset.jztStatusType = String(type || '');
+            // 成功和警告提示完整显示2秒，再淡出并移除。
+            status.offsetWidth;
+            status.style.setProperty(
+                'transition',
+                'opacity 300ms ease',
+                'important'
+            );
+            status._jztFadeTimer = window.setTimeout(() => {
+                if (
+                    !status.isConnected
+                    || status._jztStatusGeneration !== statusGeneration
+                    || status.dataset.jztStatusType === 'progress'
+                ) return;
+                status._jztFadeTimer = null;
+                status.style.setProperty('opacity', '0', 'important');
+                status._jztRemoveTimer = window.setTimeout(() => {
+                    if (
+                        status._jztStatusGeneration !== statusGeneration
+                        || status.dataset.jztStatusType === 'progress'
+                    ) return;
+                    status._jztRemoveTimer = null;
+                    if (status.isConnected) status.remove();
+                }, 300);
+            }, 2000);
         }
 
         isNoticeCreateUrl(url) {
@@ -3530,7 +3436,14 @@
         }
 
         getPartClassValues(value) {
-            const raw = String(value || '').trim();
+            // 原详情页使用“集电环装置/励磁机”，创建页复选框名称为
+            // “励磁机/集电环装置”。在通知单和机规共用入口统一转换。
+            const raw = String(value || '')
+                .replace(
+                    /集电环装置\s*[\/／、]\s*励磁机/g,
+                    '励磁机/集电环装置'
+                )
+                .trim();
             if (!raw) return [];
             const knownOptions = [
                 '励磁机/集电环装置',
@@ -4904,14 +4817,6 @@
             };
         }
 
-        getJiguiPartClassValues(value) {
-            const mapped = String(value || '').replace(
-                /集电环装置\s*[\/／、]\s*励磁机/g,
-                '励磁机/集电环装置'
-            );
-            return this.getPartClassValues(mapped);
-        }
-
         getJiguiCopySchema(template) {
             const fields = template.fields || {};
             return [
@@ -4947,7 +4852,7 @@
                     key: 'partClass',
                     label: '部件类属',
                     aliases: ['部件类属'],
-                    value: this.getJiguiPartClassValues(fields.partClass),
+                    value: this.getPartClassValues(fields.partClass),
                     preferredType: 'checkbox'
                 },
                 {
@@ -5156,21 +5061,16 @@
             runToken
         ) {
             const template = session.template;
-            const resultMap = new Map();
             const createNoticeType = this.getCreateNoticeType(
                 template.noticeType
             );
-            const typeResult = await this.applyCopySelect(
+            await this.applyCopySelect(
                 doc,
                 ['通知单类型', '通知类型'],
                 createNoticeType,
                 true
             );
             if (!this.isCopyRunCurrent(session, runToken)) return;
-            resultMap.set('noticeType', {
-                ...typeResult,
-                label: '通知单类型'
-            });
             await this.waitForCopyDomStable(doc);
             if (!this.isCopyRunCurrent(session, runToken)) return;
 
@@ -5182,11 +5082,6 @@
                 let passApplied = 0;
                 for (const definition of pending) {
                     if (this.verifyCopySchemaField(doc, definition)) {
-                        resultMap.set(definition.key, {
-                            status: 'applied',
-                            label: definition.label,
-                            type: 'existing'
-                        });
                         continue;
                     }
                     const result = await this.applyCopySchemaField(
@@ -5195,7 +5090,6 @@
                         pass === 0 ? 350 : 700
                     );
                     if (!this.isCopyRunCurrent(session, runToken)) return;
-                    resultMap.set(definition.key, result);
                     if (result.status === 'applied') {
                         passApplied += 1;
                     } else {
@@ -5215,52 +5109,26 @@
                 if (pass >= 1 && completedThisPass === 0) break;
             }
 
-            schema.forEach((definition) => {
-                if (this.verifyCopySchemaField(doc, definition)) {
-                    const existing = resultMap.get(definition.key) || {};
-                    resultMap.set(definition.key, {
-                        ...existing,
-                        status: 'applied',
-                        label: definition.label
-                    });
-                } else if (definition.optional) {
-                    resultMap.delete(definition.key);
-                } else {
-                    const previous = resultMap.get(definition.key) || {};
-                    resultMap.set(definition.key, {
-                        ...previous,
-                        status: 'failed',
-                        label: definition.label
-                    });
-                }
-            });
-
             if (
                 this.getCopyPolarity(template.fields.needMaterial)
                     === 'positive'
             ) {
-                const materialResult = await this.applyCopiedMaterialRows(
+                await this.applyCopiedMaterialRows(
                     doc,
                     template.materialRows,
                     'add'
                 );
                 if (!this.isCopyRunCurrent(session, runToken)) return;
-                resultMap.set('materialRows', materialResult);
                 if (
                     Array.isArray(template.cancelMaterialRows)
                     && template.cancelMaterialRows.length
                 ) {
-                    const cancelMaterialResult =
-                        await this.applyCopiedMaterialRows(
-                            doc,
-                            template.cancelMaterialRows,
-                            'cancel'
-                        );
-                    if (!this.isCopyRunCurrent(session, runToken)) return;
-                    resultMap.set(
-                        'cancelMaterialRows',
-                        cancelMaterialResult
+                    await this.applyCopiedMaterialRows(
+                        doc,
+                        template.cancelMaterialRows,
+                        'cancel'
                     );
+                    if (!this.isCopyRunCurrent(session, runToken)) return;
                 }
             }
 
@@ -5268,16 +5136,11 @@
                 Array.isArray(template.distributionDepartments)
                 && template.distributionDepartments.length
             ) {
-                const distributionResult =
-                    await this.applyDistributionDepartments(
-                        doc,
-                        template.distributionDepartments
-                    );
-                if (!this.isCopyRunCurrent(session, runToken)) return;
-                resultMap.set(
-                    'distributionDepartments',
-                    distributionResult
+                await this.applyDistributionDepartments(
+                    doc,
+                    template.distributionDepartments
                 );
+                if (!this.isCopyRunCurrent(session, runToken)) return;
             }
 
             session.completed = true;
@@ -5792,6 +5655,9 @@
             this.detailPanel = null; // 保留用于向后兼容
             this.detailPanels = new Map(); // 存储多个窗口，key为窗口ID，value为窗口对象
             this.detailPanelStates = new Map(); // 存储每个窗口的状态
+            // 制造令分项复制只在当前页面内暂存，不上传服务器。
+            this.zzlTransferBuffer = null;
+            this.zzlActiveCreatePanelId = '';
             this.maxZIndex = 10001; // 当前最大z-index
             this.currentTab = 'zhiling'; // 默认制造令作为首页
             this.currentSearchContent = ''; // 当前搜索内容
@@ -5800,6 +5666,11 @@
             this.bodyOverflowState = null; // 保存body的overflow状态
             this.htmlOverflowState = null; // 保存html的overflow状态
             this.isDragging = false; // 是否正在拖拽搜索图标按钮
+            // 通知单根页面每5分钟会自动刷新。该页面仅展示进入提示，
+            // 不初始化搜索、待办及服务器同步服务。
+            this.isNoticeRootMode = /^\/notice\/?$/i.test(
+                String(window.location.pathname || '')
+            );
 
             // 预读缓存：不同标签的“首页列表信息”解析结果
             // 用 Map 保存：tab -> parseResult；用另一个 Map 保存：tab -> inflight Promise
@@ -5827,6 +5698,9 @@
 
             const panel = document.createElement('div');
             panel.id = 'jigui-float-panel';
+            if (this.isNoticeRootMode) {
+                panel.classList.add('jzt-notice-root-mode');
+            }
             panel.style.cssText = `
                 position: fixed !important;
                 top: ${savedPanelState ? savedPanelState.top : defaultTop}px !important;
@@ -5956,6 +5830,41 @@
             document.body.appendChild(panel);
             this.panel = panel;
 
+            if (this.isNoticeRootMode) {
+                const modeStyle = document.createElement('style');
+                modeStyle.textContent = `
+                    #jigui-float-panel.jzt-notice-root-mode #jigui-tabs,
+                    #jigui-float-panel.jzt-notice-root-mode #jigui-left-column {
+                        display: none !important;
+                    }
+                    #jigui-float-panel.jzt-notice-root-mode #jigui-panel-content {
+                        grid-template-columns: minmax(0, 1fr) !important;
+                        width: 100% !important;
+                    }
+                    #jigui-float-panel.jzt-notice-root-mode #search-result-area {
+                        grid-column: 1 / -1 !important;
+                        width: 100% !important;
+                        height: 100% !important;
+                        min-width: 0 !important;
+                        padding: 0 !important;
+                        border: 0 !important;
+                        background: #fff5e6 !important;
+                        box-sizing: border-box !important;
+                    }
+                    #jigui-float-panel.jzt-notice-root-mode #search-result {
+                        width: 100% !important;
+                        height: 100% !important;
+                        flex: 1 1 auto !important;
+                        align-items: center !important;
+                        justify-content: center !important;
+                        overflow: hidden !important;
+                        color: #222 !important;
+                        font-family: "Microsoft YaHei", "微软雅黑", sans-serif !important;
+                    }
+                `;
+                document.head.appendChild(modeStyle);
+            }
+
             // 缓存常用 DOM 元素，减少重复 querySelector
             this._els = {
                 searchResult: panel.querySelector('#search-result'),
@@ -5991,6 +5900,50 @@
             const tabs = this._els.jiguiTabs;
             const header = this._els.panelHeader;
 
+            if (this.isNoticeRootMode && this._els.searchResult) {
+                this._els.searchResult.innerHTML = `
+                    <div style="
+                        display:flex;
+                        width:100%;
+                        height:100%;
+                        align-items:center;
+                        justify-content:center;
+                        color:#222;
+                        font-family:'Microsoft YaHei','微软雅黑',sans-serif;
+                        font-size:28px;
+                        font-weight:400;
+                        text-align:center;
+                        white-space:nowrap;
+                    ">
+                        <span>请从</span>
+                        <a href="http://10.16.88.34/zzl/"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           style="
+                               color:#0066cc;
+                               font-size:38px;
+                               font-weight:700;
+                               line-height:1;
+                               text-decoration:underline;
+                               text-underline-offset:4px;
+                           ">制造令</a>
+                        <span>或</span>
+                        <a href="http://10.16.88.34/jigui/"
+                           target="_blank"
+                           rel="noopener noreferrer"
+                           style="
+                               color:#0066cc;
+                               font-size:38px;
+                               font-weight:700;
+                               line-height:1;
+                               text-decoration:underline;
+                               text-underline-offset:4px;
+                           ">机规</a>
+                        <span>进入此工具</span>
+                    </div>
+                `;
+            }
+
             if (this.isMinimized) {
                 // 最小化状态：显示搜索图标按钮，隐藏其他内容
                 if (searchIconBtn) {
@@ -6017,16 +5970,18 @@
 
             this.attachEventListeners();
             this.makeDraggable();
-            this.initTabs();
-            this.todoManager.init();
-            if (this._els.todoSettings) {
-                this._els.todoSettings.addEventListener('click', () => {
-                    if (this.todoManager.profile) {
-                        this.todoManager.openIdentityDialog(false);
-                    } else {
-                        this.todoManager.openIdentityDialog(true);
-                    }
-                });
+            if (!this.isNoticeRootMode) {
+                this.initTabs();
+                this.todoManager.init();
+                if (this._els.todoSettings) {
+                    this._els.todoSettings.addEventListener('click', () => {
+                        if (this.todoManager.profile) {
+                            this.todoManager.openIdentityDialog(false);
+                        } else {
+                            this.todoManager.openIdentityDialog(true);
+                        }
+                    });
+                }
             }
 
             // 默认展开且最大化显示
@@ -7261,7 +7216,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
- 
+
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -7682,6 +7637,8 @@
                         <button class="detail-take-no-btn" type="button" title="打开取号页面" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">去取号</button>
                         <button class="detail-copy-notice-btn" type="button" title="按当前内容复制开单" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">复制开单</button>
                         <button class="detail-todo-btn" type="button" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">通知待办</button>
+                        <button class="detail-zzl-read-btn" type="button" title="读取当前制造令中的对应分项" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">读取</button>
+                        <button class="detail-zzl-write-btn" type="button" title="写入已读取的制造令分项内容" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">写入</button>
                         <button class="detail-minimize-btn" style="width: 24px; height: 24px; background: none; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; margin: 0; margin-right: 4px; transition: background-color 0.2s; line-height: 1;">
                             <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false" style="display:block">
                                 <line x1="2" y1="6" x2="10" y2="6" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
@@ -7772,9 +7729,31 @@
                 });
             }
 
+            const zzlReadBtn = detailPanel.querySelector('.detail-zzl-read-btn');
+            if (zzlReadBtn) {
+                zzlReadBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.readZzlTransferData(panelId);
+                });
+            }
+
+            const zzlWriteBtn = detailPanel.querySelector('.detail-zzl-write-btn');
+            if (zzlWriteBtn) {
+                zzlWriteBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.writeZzlTransferData(panelId);
+                });
+            }
+
             // 点击窗口时置顶
             detailPanel.addEventListener('mousedown', (e) => {
                 e.stopPropagation();
+                if (detailPanel.dataset.zzlRole === 'create') {
+                    this.zzlActiveCreatePanelId = panelId;
+                    this.refreshZzlTransferButtons();
+                }
                 this.bringToFront(panelId);
             });
 
@@ -7939,6 +7918,10 @@
                 panel.remove();
                 this.detailPanels.delete(panelId);
                 this.detailPanelStates.delete(panelId);
+                if (this.zzlActiveCreatePanelId === panelId) {
+                    this.zzlActiveCreatePanelId = '';
+                    this.refreshZzlTransferButtons();
+                }
 
                 // 如果关闭的是当前detailPanel，清空引用
                 if (this.detailPanel && this.detailPanel.id === panelId) {
@@ -8643,6 +8626,8 @@
 
                         // 通知单详情页显示“通知待办”，并根据原系统校核/批准字段同步完成状态。
                         this.todoManager.handleDetailLoaded(panel, contentIframe, iframeDoc, fullUrl);
+                        // 识别制造令详情页或分项创建页，并立即显示“读取/写入”按钮。
+                        this.configureZzlTransferPanel(panelId, iframeDoc, fullUrl);
 
                         // 弹窗内链接统一在新弹窗中打开，不新开浏览器标签（支持多级弹窗）
                         const self = this;
@@ -9038,6 +9023,1005 @@
             // 直接使用iframe加载原页面，完全保持原系统格式
             contentIframe.addEventListener('load', loadHandler);
             contentIframe.src = fullUrl;
+        }
+
+        normalizeZzlTransferText(value) {
+            return String(value == null ? '' : value)
+                .replace(/\u00a0/g, ' ')
+                .replace(/[\r\n\t]+/g, ' ')
+                .replace(/\s+/g, '')
+                .replace(/[：:]+$/g, '')
+                .trim();
+        }
+
+        getZzlCellValue(cell) {
+            if (!cell) return '';
+            const controls = Array.from(cell.querySelectorAll('input, select, textarea'));
+            const usable = controls.find((control) => {
+                const type = String(control.type || '').toLowerCase();
+                return !['button', 'submit', 'reset', 'hidden', 'checkbox', 'radio'].includes(type);
+            });
+            if (usable) {
+                if (usable.tagName === 'SELECT') {
+                    const option = usable.options && usable.options[usable.selectedIndex];
+                    return String(option ? (option.textContent || option.value) : usable.value || '').trim();
+                }
+                return String(usable.value || '').trim();
+            }
+            return String(cell.innerText || cell.textContent || '').replace(/\u00a0/g, ' ').trim();
+        }
+
+        expandZzlRowCells(row) {
+            const result = [];
+            Array.from(row && row.cells ? row.cells : []).forEach((cell) => {
+                const span = Math.max(1, Number(cell.colSpan) || 1);
+                for (let i = 0; i < span; i += 1) result.push(cell);
+            });
+            return result;
+        }
+
+        getZzlTableInfo(table) {
+            if (!table || !table.rows) return null;
+            const aliases = {
+                serial: ['序号', '序列号'],
+                description: ['描述', '名称', '物料描述'],
+                drawing: ['图号', '图纸号', '图号及规格'],
+                quantity: ['数量'],
+                remark: ['备注']
+            };
+            const rows = Array.from(table.rows);
+            let best = null;
+            rows.forEach((row, rowIndex) => {
+                const cells = this.expandZzlRowCells(row);
+                const normalized = cells.map((cell) =>
+                    this.normalizeZzlTransferText(this.getZzlCellValue(cell))
+                );
+                const indexMap = {};
+                Object.keys(aliases).forEach((key) => {
+                    indexMap[key] = normalized.findIndex((text) => aliases[key].includes(text));
+                });
+                const score = ['serial', 'description', 'drawing', 'quantity', 'remark']
+                    .reduce((sum, key) => sum + (indexMap[key] >= 0 ? 1 : 0), 0);
+                if (score >= 4 && (!best || score > best.score)) {
+                    best = { table, rows, rowIndex, cells, indexMap, score };
+                }
+            });
+            return best;
+        }
+
+        detectZzlCreateContext(doc) {
+            if (!doc || !doc.body) return null;
+            const preferred = Array.from(doc.querySelectorAll(
+                'font[color="red"], font[color="#ff0000"], [style*="color: red"], [style*="color:red"], [style*="255, 0, 0"]'
+            ));
+            const fallback = Array.from(doc.querySelectorAll('font, span, div, td, th, b, strong'));
+            const candidates = preferred.concat(fallback);
+            let match = null;
+            for (const element of candidates) {
+                if (element.children && element.children.length > 3) continue;
+                const raw = String(element.innerText || element.textContent || '').trim();
+                if (!raw || /[\r\n]/.test(raw)) continue;
+                const normalized = this.normalizeZzlTransferText(raw);
+                const result = normalized.match(/^创建(.{1,24})$/);
+                if (!result) continue;
+                if (!match || normalized.length < match.raw.length) {
+                    const sourceName = result[1];
+                    match = {
+                        raw: normalized,
+                        category: sourceName === '主机部分' ? '主机' : sourceName,
+                        isMain: sourceName === '主机部分'
+                    };
+                }
+            }
+            return match;
+        }
+
+        findZzlSourceTable(doc, context) {
+            if (!doc || !context) return null;
+            const tables = Array.from(doc.querySelectorAll('table'));
+            const allElements = Array.from(doc.querySelectorAll('*'));
+            const elementOrder = new Map();
+            allElements.forEach((element, index) => elementOrder.set(element, index));
+            const category = this.normalizeZzlTransferText(context.category);
+            const categoryNames = context.isMain
+                ? []
+                : Array.from(new Set([
+                    category,
+                    category.endsWith('清单') ? category : category + '清单'
+                ]));
+            const categoryAnchors = context.isMain ? [] : Array.from(
+                doc.querySelectorAll('td, th, font, span, div, b, strong')
+            ).filter((element) => {
+                const text = this.normalizeZzlTransferText(
+                    element.innerText || element.textContent || ''
+                );
+                return categoryNames.includes(text);
+            });
+            const leakAnchors = context.isMain ? Array.from(
+                doc.querySelectorAll('td, th, font, span, div, b, strong')
+            ).filter((element) => {
+                const text = this.normalizeZzlTransferText(
+                    element.innerText || element.textContent || ''
+                );
+                return text === '漏氢量' || text.startsWith('漏氢量');
+            }) : [];
+            const approvalBoundaryPositions = Array.from(
+                doc.querySelectorAll('tr')
+            ).filter((row) => {
+                const text = this.normalizeZzlTransferText(
+                    row.innerText || row.textContent || ''
+                );
+                return text.includes('编制') &&
+                    text.includes('校核') &&
+                    text.includes('批准');
+            }).map((row) => elementOrder.get(row))
+                .filter((position) => Number.isFinite(position))
+                .sort((a, b) => a - b);
+            const getAnchorBoundary = (anchorPosition) =>
+                approvalBoundaryPositions.find((position) =>
+                    position > anchorPosition
+                );
+            const candidates = [];
+            tables.forEach((table, order) => {
+                const info = this.getZzlTableInfo(table);
+                if (!info) return;
+                const normalizedTableText = this.normalizeZzlTransferText(table.innerText || table.textContent || '');
+                const rowsBeforeHeader = info.rows.slice(0, info.rowIndex + 1);
+                const beforeText = this.normalizeZzlTransferText(
+                    rowsBeforeHeader.map((row) => row.innerText || row.textContent || '').join(' ')
+                );
+                let matched = false;
+                let score = info.score * 10;
+                let contextTable = table;
+                if (context.isMain) {
+                    // 主机参数行和明细行可能分属两个相邻 table：
+                    // 先找“漏氢量”，再选它后面最近的标准明细表。
+                    const tablePosition = elementOrder.get(table);
+                    let nearestLeakGap = Number.POSITIVE_INFINITY;
+                    let nearestLeakAnchor = null;
+                    leakAnchors.forEach((anchor) => {
+                        const anchorPosition = elementOrder.get(anchor);
+                        if (!Number.isFinite(anchorPosition) ||
+                            !Number.isFinite(tablePosition) ||
+                            anchorPosition > tablePosition) return;
+                        const boundary = getAnchorBoundary(anchorPosition);
+                        if (Number.isFinite(boundary) &&
+                            tablePosition >= boundary) return;
+                        const gap = tablePosition - anchorPosition;
+                        if (gap < nearestLeakGap) {
+                            nearestLeakGap = gap;
+                            nearestLeakAnchor = anchor;
+                        }
+                    });
+                    const leakInsideTable = normalizedTableText.includes('漏氢量');
+                    const leakImmediatelyBeforeTable =
+                        Number.isFinite(nearestLeakGap) &&
+                        nearestLeakGap <= 500;
+                    matched = leakInsideTable || leakImmediatelyBeforeTable;
+                    if (leakInsideTable) {
+                        score += 180;
+                    } else if (leakImmediatelyBeforeTable) {
+                        score += Math.max(60, 170 - nearestLeakGap / 4);
+                    }
+                    if (nearestLeakAnchor && nearestLeakAnchor.closest('table')) {
+                        contextTable = nearestLeakAnchor.closest('table');
+                    }
+                } else {
+                    // 原系统有两种结构：
+                    // 1. “名称/分类名”和明细行位于同一 table；
+                    // 2. 分类标题是独立 table，明细 table 紧随其后。
+                    // 因此除检查表内文字外，还要按 DOM 顺序寻找该分类标题后最近的明细表。
+                    const tablePosition = elementOrder.get(table);
+                    let nearestAnchorGap = Number.POSITIVE_INFINITY;
+                    let nearestCategoryAnchor = null;
+                    categoryAnchors.forEach((anchor) => {
+                        const anchorPosition = elementOrder.get(anchor);
+                        if (!Number.isFinite(anchorPosition) ||
+                            !Number.isFinite(tablePosition) ||
+                            anchorPosition > tablePosition) return;
+                        const boundary = getAnchorBoundary(anchorPosition);
+                        if (Number.isFinite(boundary) &&
+                            tablePosition >= boundary) return;
+                        const gap = tablePosition - anchorPosition;
+                        if (gap < nearestAnchorGap) {
+                            nearestAnchorGap = gap;
+                            nearestCategoryAnchor = anchor;
+                        }
+                    });
+                    const categoryInsideTable = categoryNames.some((name) =>
+                        beforeText.includes(name) ||
+                        normalizedTableText.startsWith(name)
+                    );
+                    const categoryImmediatelyBeforeTable =
+                        Number.isFinite(nearestAnchorGap) &&
+                        nearestAnchorGap <= 500;
+                    matched = categoryInsideTable || categoryImmediatelyBeforeTable;
+                    if (categoryInsideTable) {
+                        score += 120;
+                    } else if (categoryImmediatelyBeforeTable) {
+                        score += Math.max(45, 110 - nearestAnchorGap / 5);
+                    }
+                    if (nearestCategoryAnchor && nearestCategoryAnchor.closest('table')) {
+                        contextTable = nearestCategoryAnchor.closest('table');
+                    }
+                }
+                if (!matched) return;
+                score -= Math.min(30, info.rows.length / 10);
+                candidates.push({ table, info, contextTable, order, score });
+            });
+            if (!candidates.length) {
+                // 冷却器等分项只有“安装图/型号/说明”等字段，
+                // 不存在“描述/图号/数量/备注”标准明细表。
+                const fallbackAnchor = categoryAnchors
+                    .map((anchor) => ({
+                        anchor,
+                        row: anchor.closest('tr'),
+                        table: anchor.closest('table'),
+                        position: elementOrder.get(anchor)
+                    }))
+                    .filter((item) => item.row && item.table)
+                    .sort((a, b) => a.position - b.position)[0];
+                if (fallbackAnchor) {
+                    return {
+                        table: fallbackAnchor.table,
+                        info: null,
+                        contextTable: fallbackAnchor.table,
+                        startRow: fallbackAnchor.row,
+                        fieldOnly: true,
+                        order: 0,
+                        score: 1
+                    };
+                }
+                return null;
+            }
+            candidates.sort((a, b) => {
+                if (b.score !== a.score) return b.score - a.score;
+                if (context.isMain) return a.order - b.order;
+                return a.info.rows.length - b.info.rows.length;
+            });
+            return candidates[0];
+        }
+
+        findZzlTargetTable(doc) {
+            if (!doc) return null;
+            const candidates = Array.from(doc.querySelectorAll('table'))
+                .map((table, order) => ({ table, order, info: this.getZzlTableInfo(table) }))
+                .filter((item) => item.info);
+            if (!candidates.length) return null;
+            candidates.sort((a, b) => {
+                if (b.info.score !== a.info.score) return b.info.score - a.info.score;
+                return a.info.rows.length - b.info.rows.length;
+            });
+            return candidates[0];
+        }
+
+        configureZzlTransferPanel(panelId, iframeDoc, fullUrl) {
+            const panel = this.detailPanels.get(panelId);
+            if (!panel) return;
+            panel.dataset.zzlRole = '';
+            panel.dataset.zzlCategory = '';
+            panel.dataset.zzlMain = '0';
+
+            let isZzl = false;
+            try {
+                isZzl = new URL(fullUrl, window.location.href).pathname.toLowerCase().startsWith('/zzl/');
+            } catch (e) {}
+            if (!isZzl) {
+                this.refreshZzlTransferButtons();
+                return;
+            }
+
+            const createContext = this.detectZzlCreateContext(iframeDoc);
+            if (createContext) {
+                panel.dataset.zzlRole = 'create';
+                panel.dataset.zzlCategory = createContext.category;
+                panel.dataset.zzlMain = createContext.isMain ? '1' : '0';
+                this.zzlActiveCreatePanelId = panelId;
+                if (!iframeDoc.body.hasAttribute('data-zzl-create-active')) {
+                    iframeDoc.body.setAttribute('data-zzl-create-active', '1');
+                    iframeDoc.body.addEventListener('mousedown', () => {
+                        this.zzlActiveCreatePanelId = panelId;
+                        this.refreshZzlTransferButtons();
+                    }, true);
+                }
+            } else {
+                // 详情窗口只有在确实包含制造令明细表时才作为读取源。
+                const hasDetailTable = Array.from(iframeDoc.querySelectorAll('table'))
+                    .some((table) => Boolean(this.getZzlTableInfo(table)));
+                if (hasDetailTable) panel.dataset.zzlRole = 'source';
+            }
+            this.refreshZzlTransferButtons();
+        }
+
+        getActiveZzlCreateContext() {
+            const panel = this.detailPanels.get(this.zzlActiveCreatePanelId);
+            if (!panel || panel.dataset.zzlRole !== 'create') return null;
+            return {
+                panel,
+                panelId: panel.id,
+                category: panel.dataset.zzlCategory || '',
+                isMain: panel.dataset.zzlMain === '1'
+            };
+        }
+
+        refreshZzlTransferButtons() {
+            const active = this.getActiveZzlCreateContext();
+            this.detailPanels.forEach((panel) => {
+                const read = panel.querySelector('.detail-zzl-read-btn');
+                const write = panel.querySelector('.detail-zzl-write-btn');
+                const role = panel.dataset.zzlRole || '';
+                if (read) read.style.display = role === 'source' && active ? 'flex' : 'none';
+                if (write) write.style.display = role === 'create' ? 'flex' : 'none';
+            });
+        }
+
+        getZzlExplanationCandidates(doc, detailTable) {
+            if (!doc || !detailTable) return [];
+            const allElements = Array.from(doc.querySelectorAll('*'));
+            const order = new Map();
+            allElements.forEach((element, index) => order.set(element, index));
+            const tablePosition = order.get(detailTable);
+            return Array.from(doc.querySelectorAll('td, th'))
+                .filter((cell) =>
+                    this.normalizeZzlTransferText(
+                        cell.innerText || cell.textContent || ''
+                    ) === '说明'
+                )
+                .map((labelCell) => {
+                    const row = labelCell.closest('tr');
+                    const containingTable = labelCell.closest('table');
+                    const position = order.get(labelCell);
+                    let distance = Number.POSITIVE_INFINITY;
+                    if (containingTable === detailTable) {
+                        distance = 0;
+                    } else if (Number.isFinite(position) && Number.isFinite(tablePosition) &&
+                        position >= tablePosition) {
+                        distance = position - tablePosition;
+                    }
+                    return { labelCell, row, distance };
+                })
+                .filter((item) => Number.isFinite(item.distance) && item.distance <= 800)
+                .sort((a, b) => a.distance - b.distance);
+        }
+
+        writeZzlExplanation(doc, detailTable, value) {
+            if (!value) return false;
+            const candidates = this.getZzlExplanationCandidates(doc, detailTable);
+            for (const candidate of candidates) {
+                const cells = Array.from(candidate.row && candidate.row.cells
+                    ? candidate.row.cells
+                    : []);
+                const labelIndex = cells.indexOf(candidate.labelCell);
+                const valueCells = labelIndex >= 0 ? cells.slice(labelIndex + 1) : [];
+                for (const cell of valueCells) {
+                    const textarea = cell.querySelector('textarea');
+                    const control = textarea || this.findZzlWritableControl(cell);
+                    if (control && this.setZzlControlValue(control, value)) return true;
+                }
+                // 个别页面把“说明”和输入框拆在相邻容器中，向后做一次短距离查找。
+                let node = candidate.labelCell;
+                for (let i = 0; i < 12 && node; i += 1) {
+                    node = node.nextElementSibling;
+                    if (!node) break;
+                    const textarea = node.querySelector && node.querySelector('textarea');
+                    const control = textarea || this.findZzlWritableControl(node);
+                    if (control && this.setZzlControlValue(control, value)) return true;
+                }
+            }
+            return false;
+        }
+
+        getZzlPostDetailRows(info, lastDataRowIndex) {
+            if (!info || !info.table || !info.table.ownerDocument) return [];
+            const docRows = Array.from(info.table.ownerDocument.querySelectorAll('tr'));
+            const lastDataRow = info.rows[lastDataRowIndex];
+            const startIndex = docRows.indexOf(lastDataRow);
+            if (startIndex < 0) return info.rows.slice(lastDataRowIndex + 1);
+            const result = [];
+            for (let i = startIndex + 1; i < docRows.length && result.length < 80; i += 1) {
+                const row = docRows[i];
+                const rowText = this.normalizeZzlTransferText(
+                    row.innerText || row.textContent || ''
+                );
+                if (!rowText) continue;
+                // 每个制造令分项以编制/校核/批准行结束，不能越界读到下一个分项。
+                if (rowText.includes('编制') &&
+                    rowText.includes('校核') &&
+                    rowText.includes('批准')) break;
+                // 如果已经进入下一张标准明细表，也结束当前区块。
+                const normalizedCells = Array.from(row.cells || []).map((cell) =>
+                    this.normalizeZzlTransferText(
+                        cell.innerText || cell.textContent || ''
+                    )
+                );
+                const standardHeaderHits = ['描述', '图号', '数量', '备注']
+                    .filter((label) => normalizedCells.includes(label)).length;
+                if (standardHeaderHits >= 3) break;
+                result.push(row);
+            }
+            return result;
+        }
+
+        collectZzlFieldPairsFromRows(rows, excluded) {
+            const result = {};
+            const embeddedLabels = [
+                '备件BS',
+                '工具FS',
+                '出厂文件CJ',
+                '试验规范',
+                '碳刷牌号',
+                '励磁机铭牌',
+                '底漆与中间漆是否特殊要求',
+                '面漆'
+            ];
+            const escapeRegex = (value) =>
+                String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const findFlexibleLabel = (text, label) => {
+                // 窄单元格会把“面漆”等字段名显示为两行，innerText 中可能实际包含
+                // 空格、换行或不换行空格。匹配时允许字段名每个字符之间存在空白。
+                const pattern = Array.from(label)
+                    .map((char) => escapeRegex(char))
+                    .join('\\s*');
+                return new RegExp(pattern).exec(text);
+            };
+            const assignValue = (label, rawValue) => {
+                let currentLabel = label;
+                let remaining = String(rawValue || '').trim();
+                // 有些旧页面把后续“标签+值”一起塞进前一字段的 td。
+                // 按稳定字段名切开，例如“机规另开面漆机规另开”，同时兼容
+                // “机规另开面\n漆机规另开”这类由窄单元格产生的文本。
+                while (remaining) {
+                    let nextLabel = '';
+                    let nextIndex = -1;
+                    let nextLength = 0;
+                    embeddedLabels.forEach((candidate) => {
+                        const match = findFlexibleLabel(remaining, candidate);
+                        if (!match || match.index <= 0) return;
+                        if (nextIndex < 0 || match.index < nextIndex) {
+                            nextIndex = match.index;
+                            nextLength = match[0].length;
+                            nextLabel = candidate;
+                        }
+                    });
+                    if (nextIndex < 0) {
+                        result[currentLabel] = remaining;
+                        break;
+                    }
+                    result[currentLabel] = remaining.slice(0, nextIndex).trim();
+                    currentLabel = nextLabel;
+                    remaining = remaining.slice(nextIndex + nextLength).trim();
+                }
+            };
+            (rows || []).forEach((row) => {
+                // 原系统经常用外层 td 包住一张内层字段表。外层行的文本会变成
+                // “同主机面漆同主机”这类拼接值，只能读取不含子表的最内层字段行。
+                if (row.querySelector && row.querySelector('table')) return;
+                const cells = Array.from(row.cells || []);
+                for (let i = 0; i + 1 < cells.length; i += 2) {
+                    const label = this.normalizeZzlTransferText(
+                        this.getZzlCellValue(cells[i])
+                    );
+                    const value = this.getZzlCellValue(cells[i + 1]).trim();
+                    if (!label || !value || label === '说明' ||
+                        label.length > 30 || excluded.includes(label)) continue;
+                    assignValue(label, value);
+                }
+            });
+            // 二次保护：无论字段来自哪一种旧表格 DOM 结构，只要前一字段中仍混入
+            // “面漆”标签，就把它和后续值拆回独立字段，禁止写入同一个输入框。
+            const paintRequirementLabel = '底漆与中间漆是否特殊要求';
+            const mixedPaintValue = result[paintRequirementLabel];
+            if (mixedPaintValue) {
+                const match = findFlexibleLabel(mixedPaintValue, '面漆');
+                if (match && match.index > 0) {
+                    result[paintRequirementLabel] = mixedPaintValue
+                        .slice(0, match.index)
+                        .trim();
+                    result['面漆'] = mixedPaintValue
+                        .slice(match.index + match[0].length)
+                        .trim();
+                }
+            }
+            return result;
+        }
+
+        getZzlFieldOnlySectionRows(tableMatch) {
+            const table = tableMatch && tableMatch.table;
+            const startRow = tableMatch && tableMatch.startRow;
+            if (!table || !startRow || !table.ownerDocument) return [];
+            const docRows = Array.from(table.ownerDocument.querySelectorAll('tr'));
+            const startIndex = docRows.indexOf(startRow);
+            if (startIndex < 0) return [];
+            const result = [];
+            for (let i = startIndex; i < docRows.length && result.length < 80; i += 1) {
+                const row = docRows[i];
+                const rowText = this.normalizeZzlTransferText(
+                    row.innerText || row.textContent || ''
+                );
+                if (!rowText) continue;
+                if (i > startIndex &&
+                    rowText.includes('编制') &&
+                    rowText.includes('校核') &&
+                    rowText.includes('批准')) break;
+                result.push(row);
+            }
+            return result;
+        }
+
+        extractZzlFieldOnlyData(tableMatch, context) {
+            const excluded = [
+                '工号', '合同号', '项目号', '编号', '序号',
+                '编制', '校核', '批准', '填单人', '创建人', '日期'
+            ];
+            const sectionRows = this.getZzlFieldOnlySectionRows(tableMatch);
+            const fields = this.collectZzlFieldPairsFromRows(
+                sectionRows,
+                excluded
+            );
+            let explanation = '';
+            sectionRows.some((row) => {
+                const cells = Array.from(row.cells || []);
+                const labelIndex = cells.findIndex((cell) =>
+                    this.normalizeZzlTransferText(
+                        this.getZzlCellValue(cell)
+                    ) === '说明'
+                );
+                if (labelIndex < 0) return false;
+                explanation = cells.slice(labelIndex + 1)
+                    .map((cell) => this.getZzlCellValue(cell))
+                    .filter(Boolean)
+                    .join('\n')
+                    .trim();
+                return true;
+            });
+            delete fields['说明'];
+            return {
+                category: context.category,
+                isMain: context.isMain,
+                rows: [],
+                fields,
+                extraFields: {},
+                notes: {},
+                explanation,
+                fieldOnly: true,
+                readAt: Date.now()
+            };
+        }
+
+        extractZzlTransferData(tableMatch, context) {
+            if (!tableMatch.info || tableMatch.fieldOnly) {
+                return this.extractZzlFieldOnlyData(tableMatch, context);
+            }
+            const info = tableMatch.info;
+            const rows = [];
+            let lastDataRowIndex = info.rowIndex;
+            let dataRowsStarted = false;
+            for (let rowIndex = info.rowIndex + 1; rowIndex < info.rows.length; rowIndex += 1) {
+                const row = info.rows[rowIndex];
+                const cells = this.expandZzlRowCells(row);
+                const serialIndex = info.indexMap.serial >= 0 ? info.indexMap.serial : 0;
+                const serial = this.normalizeZzlTransferText(this.getZzlCellValue(cells[serialIndex]));
+                const valueAt = (key) => {
+                    const index = info.indexMap[key];
+                    return index >= 0 ? this.getZzlCellValue(cells[index]) : '';
+                };
+                const serialIsDetail = /^\d+(?:\.\d+)*$/.test(serial);
+                if (serialIsDetail) {
+                    dataRowsStarted = true;
+                } else if (!dataRowsStarted) {
+                    continue;
+                } else if (serial) {
+                    // 标准明细开始后，首列出现非序号文字即进入附加字段区。
+                    break;
+                }
+                rows.push({
+                    serial,
+                    description: valueAt('description'),
+                    drawing: valueAt('drawing'),
+                    quantity: valueAt('quantity'),
+                    remark: valueAt('remark')
+                });
+                lastDataRowIndex = rowIndex;
+            }
+
+            const fields = {};
+            const excluded = ['工号', '合同号', '项目号', '编号', '序号', '编制', '校核', '批准', '填单人', '创建人', '日期'];
+            const headerRows = [];
+            const dataHeaderRow = info.rows[info.rowIndex];
+            if (tableMatch.contextTable &&
+                tableMatch.contextTable !== info.table &&
+                tableMatch.contextTable.rows) {
+                Array.from(tableMatch.contextTable.rows).forEach((row) => {
+                    // 外层 table 可能包住整个分项。只取位于标准明细表头之前、
+                    // 且本身不包含标准明细表的参数行，禁止读到底部附加字段。
+                    if (row.contains(info.table)) return;
+                    const relation = row.compareDocumentPosition(dataHeaderRow);
+                    if (relation & Node.DOCUMENT_POSITION_FOLLOWING) {
+                        headerRows.push(row);
+                    }
+                });
+            }
+            headerRows.push(...info.rows.slice(0, info.rowIndex));
+            Object.assign(
+                fields,
+                this.collectZzlFieldPairsFromRows(headerRows, excluded)
+            );
+
+            const postRows = this.getZzlPostDetailRows(info, lastDataRowIndex);
+            const extraFields = this.collectZzlFieldPairsFromRows(postRows, excluded);
+            const notes = {};
+            postRows.forEach((row) => {
+                const cells = Array.from(row.cells || []);
+                for (let i = 0; i < cells.length - 1; i += 1) {
+                    const label = this.normalizeZzlTransferText(this.getZzlCellValue(cells[i]));
+                    if (!/(备注|说明|要求|执行信息)/.test(label)) continue;
+                    const value = cells.slice(i + 1)
+                        .map((cell) => this.getZzlCellValue(cell))
+                        .filter(Boolean)
+                        .join('\n')
+                        .trim();
+                    if (value) notes[label] = value;
+                }
+            });
+            let explanation = '';
+            postRows.some((row) => {
+                const cells = Array.from(row.cells || []);
+                const labelIndex = cells.findIndex((cell) =>
+                    this.normalizeZzlTransferText(
+                        this.getZzlCellValue(cell)
+                    ) === '说明'
+                );
+                if (labelIndex < 0) return false;
+                explanation = cells.slice(labelIndex + 1)
+                    .map((cell) => this.getZzlCellValue(cell))
+                    .filter(Boolean)
+                    .join('\n')
+                    .trim();
+                return Boolean(explanation);
+            });
+            return {
+                category: context.category,
+                isMain: context.isMain,
+                rows,
+                fields,
+                extraFields,
+                notes,
+                // 说明为空时必须保持为空；禁止越过当前分项的
+                // “编制/校核/批准”边界向后寻找下一分项说明。
+                explanation,
+                readAt: Date.now()
+            };
+        }
+
+        showZzlTransferStatus(panel, text, type) {
+            if (!panel) return;
+            if (this.todoManager &&
+                typeof this.todoManager.showNoticeCopyStatus === 'function') {
+                this.todoManager.showNoticeCopyStatus(
+                    panel,
+                    text,
+                    type || 'progress'
+                );
+            }
+        }
+
+        readZzlTransferData(panelId) {
+            const sourcePanel = this.detailPanels.get(panelId);
+            const active = this.getActiveZzlCreateContext();
+            if (!sourcePanel || !active) {
+                this.showZzlTransferStatus(
+                    sourcePanel,
+                    '请先打开并激活一个制造令分项创建窗口。',
+                    'warning'
+                );
+                return;
+            }
+            const iframe = sourcePanel.querySelector('.detail-content');
+            let doc = null;
+            try {
+                doc = iframe && (iframe.contentDocument || iframe.contentWindow?.document);
+            } catch (e) {}
+            if (!doc) {
+                this.showZzlTransferStatus(
+                    sourcePanel,
+                    '无法读取当前制造令页面。',
+                    'warning'
+                );
+                return;
+            }
+            const matched = this.findZzlSourceTable(doc, active);
+            if (!matched) {
+                this.showZzlTransferStatus(
+                    sourcePanel,
+                    '未找到“' + active.category + '”对应的明细表。',
+                    'warning'
+                );
+                return;
+            }
+            const data = this.extractZzlTransferData(matched, active);
+            const fieldCount =
+                Object.keys(data.fields || {}).length +
+                Object.keys(data.extraFields || {}).length +
+                Object.keys(data.notes || {}).length +
+                (data.explanation ? 1 : 0);
+            if (!data.rows.length && !fieldCount) {
+                this.showZzlTransferStatus(
+                    sourcePanel,
+                    '已找到“' + active.category + '”表，但未识别到可复制内容。',
+                    'warning'
+                );
+                return;
+            }
+            const sourceTitle = sourcePanel.querySelector('.detail-title');
+            data.sourceTitle = String(sourceTitle ? sourceTitle.textContent : '').replace(/^[^0-9A-Za-z\u4e00-\u9fff]+/, '').trim();
+            this.zzlTransferBuffer = data;
+            this.showZzlTransferStatus(
+                sourcePanel,
+                '读取完成，请到“创建”界面写入',
+                'success'
+            );
+        }
+
+        setZzlControlValue(control, value) {
+            if (!control) return false;
+            const text = String(value == null ? '' : value);
+            if (control.tagName === 'SELECT') {
+                const normalized = this.normalizeZzlTransferText(text);
+                const option = Array.from(control.options || []).find((item) =>
+                    this.normalizeZzlTransferText(item.textContent || item.value) === normalized
+                );
+                if (!option) return false;
+                control.value = option.value;
+            } else {
+                control.value = text;
+                // 对“机规24-259”“机规XX-XXX”等引用编号突出显示，
+                // 便于填写人员在提交前重点核对。普通内容恢复页面默认颜色。
+                const hasMachineRuleNumber =
+                    /机规\s*[A-Za-z0-9]+(?:[-－][A-Za-z0-9.]+)+/i.test(text);
+                control.style.color = hasMachineRuleNumber ? '#ff0000' : '';
+            }
+            ['input', 'change', 'blur'].forEach((type) => {
+                control.dispatchEvent(new Event(type, { bubbles: true }));
+            });
+            return true;
+        }
+
+        setZzlDisplayCellValue(cell, value) {
+            if (!cell) return false;
+            const text = String(value == null ? '' : value);
+            const walker = cell.ownerDocument.createTreeWalker(
+                cell,
+                NodeFilter.SHOW_TEXT
+            );
+            let firstTextNode = null;
+            let node = walker.nextNode();
+            while (node) {
+                if (String(node.nodeValue || '').trim()) {
+                    firstTextNode = node;
+                    break;
+                }
+                node = walker.nextNode();
+            }
+            if (firstTextNode) {
+                firstTextNode.nodeValue = text;
+            } else {
+                cell.appendChild(cell.ownerDocument.createTextNode(text));
+            }
+            return true;
+        }
+
+        findZzlWritableControl(cell) {
+            if (!cell) return null;
+            return Array.from(cell.querySelectorAll('input, textarea, select')).find((control) => {
+                const type = String(control.type || '').toLowerCase();
+                return !control.disabled && !control.readOnly &&
+                    !['button', 'submit', 'reset', 'hidden', 'checkbox', 'radio'].includes(type);
+            }) || null;
+        }
+
+        findZzlWritableControlByLabel(doc, label) {
+            const normalizedLabel = this.normalizeZzlTransferText(label);
+            if (!doc || !normalizedLabel) return null;
+            const cells = Array.from(doc.querySelectorAll('td, th'));
+            for (const cell of cells) {
+                if (this.normalizeZzlTransferText(
+                    this.getZzlCellValue(cell)
+                ) !== normalizedLabel) continue;
+                let target = cell.nextElementSibling;
+                while (target && !/^(TD|TH)$/.test(target.tagName)) {
+                    target = target.nextElementSibling;
+                }
+                const control = this.findZzlWritableControl(target);
+                if (control) return control;
+            }
+            return null;
+        }
+
+        fillZzlFieldByLabel(doc, label, value) {
+            if (!value) return false;
+            const control = this.findZzlWritableControlByLabel(doc, label);
+            return Boolean(control && this.setZzlControlValue(control, value));
+        }
+
+        repairZzlPaintTargetFields(doc) {
+            const requirementControl = this.findZzlWritableControlByLabel(
+                doc,
+                '底漆与中间漆是否特殊要求'
+            );
+            const finishPaintControl = this.findZzlWritableControlByLabel(
+                doc,
+                '面漆'
+            );
+            if (!requirementControl || !finishPaintControl) return false;
+
+            const mixedValue = String(requirementControl.value || '');
+            // 最终写入保护：旧页面可能在读取阶段把同一行后半段合并为
+            // “机规另开面漆机规另开”。无论来源 DOM 如何嵌套，都在目标页
+            // 将它强制拆回两个独立字段。
+            const match = /面\s*漆/.exec(mixedValue);
+            if (!match || match.index <= 0) return false;
+
+            const requirementValue = mixedValue.slice(0, match.index).trim();
+            const finishPaintValue = mixedValue
+                .slice(match.index + match[0].length)
+                .trim();
+            this.setZzlControlValue(requirementControl, requirementValue);
+            this.setZzlControlValue(finishPaintControl, finishPaintValue);
+            return true;
+        }
+
+        writeZzlTransferData(panelId) {
+            const panel = this.detailPanels.get(panelId);
+            if (!panel || panel.dataset.zzlRole !== 'create') return;
+            const context = {
+                category: panel.dataset.zzlCategory || '',
+                isMain: panel.dataset.zzlMain === '1'
+            };
+            const data = this.zzlTransferBuffer;
+            if (!data) {
+                this.showZzlTransferStatus(
+                    panel,
+                    '还没有读取内容，请先在制造令详情窗口点击“读取”。',
+                    'warning'
+                );
+                return;
+            }
+            if (data.category !== context.category || Boolean(data.isMain) !== Boolean(context.isMain)) {
+                this.showZzlTransferStatus(
+                    panel,
+                    '已读取“' + data.category + '”，与当前“' +
+                        context.category + '”分类不一致。',
+                    'warning'
+                );
+                return;
+            }
+            const iframe = panel.querySelector('.detail-content');
+            let doc = null;
+            try {
+                doc = iframe && (iframe.contentDocument || iframe.contentWindow?.document);
+            } catch (e) {}
+            if (!doc) {
+                this.showZzlTransferStatus(
+                    panel,
+                    '无法访问当前创建页面。',
+                    'warning'
+                );
+                return;
+            }
+            const target = this.findZzlTargetTable(doc);
+            if (!target && data.rows.length) {
+                this.showZzlTransferStatus(
+                    panel,
+                    '未在创建页面中识别到明细表。',
+                    'warning'
+                );
+                return;
+            }
+
+            const targetRows = [];
+            const targetInfo = target ? target.info : null;
+            if (targetInfo) {
+                for (let i = targetInfo.rowIndex + 1;
+                    i < targetInfo.rows.length;
+                    i += 1) {
+                    const row = targetInfo.rows[i];
+                    const cells = this.expandZzlRowCells(row);
+                    const serialIndex = targetInfo.indexMap.serial >= 0
+                        ? targetInfo.indexMap.serial
+                        : 0;
+                    const serial = this.normalizeZzlTransferText(
+                        this.getZzlCellValue(cells[serialIndex])
+                    );
+                    if (/^\d+(?:[.．。]\d+)*[.．。]?$/.test(serial)) {
+                        targetRows.push({ row, cells, serial });
+                    }
+                }
+            }
+            if (data.rows.length && !targetRows.length) {
+                this.showZzlTransferStatus(
+                    panel,
+                    '创建页面中没有识别到可填写的明细行。',
+                    'warning'
+                );
+                return;
+            }
+
+            let filledRows = 0;
+            targetRows.forEach((targetRow, index) => {
+                const sourceRow = data.rows[index] || {
+                    serial: '',
+                    description: '',
+                    drawing: '',
+                    quantity: '',
+                    remark: ''
+                };
+                let changed = false;
+                const serialColumnIndex = targetInfo.indexMap.serial;
+                if (serialColumnIndex >= 0) {
+                    const serialControl = this.findZzlWritableControl(
+                        targetRow.cells[serialColumnIndex]
+                    );
+                    if (serialControl && this.setZzlControlValue(
+                        serialControl,
+                        sourceRow.serial
+                    )) {
+                        changed = true;
+                    } else if (!serialControl && this.setZzlDisplayCellValue(
+                        targetRow.cells[serialColumnIndex],
+                        sourceRow.serial
+                    )) {
+                        changed = true;
+                    }
+                }
+                ['description', 'drawing', 'quantity', 'remark'].forEach((key) => {
+                    const columnIndex = targetInfo.indexMap[key];
+                    if (columnIndex < 0) return;
+                    const control = this.findZzlWritableControl(
+                        targetRow.cells[columnIndex]
+                    );
+                    if (control && this.setZzlControlValue(
+                        control,
+                        sourceRow[key]
+                    )) changed = true;
+                });
+                if (changed && index < data.rows.length) filledRows += 1;
+            });
+
+            let filledFields = 0;
+            Object.keys(data.fields).forEach((label) => {
+                if (this.fillZzlFieldByLabel(doc, label, data.fields[label])) filledFields += 1;
+            });
+            Object.keys(data.extraFields || {}).forEach((label) => {
+                if (this.fillZzlFieldByLabel(
+                    doc,
+                    label,
+                    data.extraFields[label]
+                )) filledFields += 1;
+            });
+            Object.keys(data.notes).forEach((label) => {
+                if (this.fillZzlFieldByLabel(doc, label, data.notes[label])) filledFields += 1;
+            });
+            this.repairZzlPaintTargetFields(doc);
+            const explanationWritten = target
+                ? this.writeZzlExplanation(
+                    doc,
+                    target.table,
+                    data.explanation
+                )
+                : this.fillZzlFieldByLabel(
+                    doc,
+                    '说明',
+                    data.explanation
+                );
+            if (explanationWritten) {
+                filledFields += 1;
+            }
+
+            this.showZzlTransferStatus(
+                panel,
+                '写入完成，请仔细核对后提交',
+                'success'
+            );
         }
 
         saveDetailPanelStateById(panelId) {
