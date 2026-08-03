@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.11
+// @version      3.6.12
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -15,8 +15,8 @@
 // @grant        unsafeWindow
 // @connect      64.90.23.77
 // @require      https://cdn.jsdelivr.net/npm/gbk.js@0.3.0/dist/gbk.min.js
-// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
-// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.js
+// @downloadURL  https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt-beta.user.js
+// @updateURL    https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt-beta.user.js
 // ==/UserScript==
 
 (function() {
