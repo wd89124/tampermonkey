@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.41
+// @version      3.6.44
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -12,6 +12,7 @@
 // @grant        GM_notification
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_info
 // @grant        unsafeWindow
 // @connect      64.90.23.77
 // @connect      gh-proxy.org
@@ -23,7 +24,7 @@
 (function() {
     'use strict';
 
-    /* global GBK */
+    /* global GBK, GM_info */
 
     // 固定浏览器标签页标题
     try {
@@ -466,7 +467,7 @@
         }
         #jzt-update-button:hover,
         #jzt-update-button:focus-visible {
-            background: #d97706 !important;
+            background: #f59e0b !important;
             outline: none !important;
         }
         #jzt-todo-panel {
@@ -570,7 +571,17 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.6.39';
+    const CURRENT_SCRIPT_VERSION = (() => {
+        try {
+            const version = GM_info && GM_info.script
+                ? GM_info.script.version
+                : '';
+            return String(version || '').trim() || '0.0.0';
+        } catch (error) {
+            return '0.0.0';
+        }
+    })();
+    const TODO_CLIENT_VERSION = CURRENT_SCRIPT_VERSION;
     const SCRIPT_UPDATE_URL = 'https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.user.js';
     const SCRIPT_UPDATE_AVAILABLE_VERSION_KEY = 'jzt-script-update-available-version';
     const TODO_UPDATE_GUIDE_ORIGIN = 'https://64.90.23.77';
@@ -5818,7 +5829,7 @@
                 cachedVersion
                 && this.compareScriptVersions(
                     cachedVersion,
-                    TODO_CLIENT_VERSION
+                    CURRENT_SCRIPT_VERSION
                 ) > 0
             ) {
                 this.showScriptUpdateNotice(cachedVersion);
@@ -5845,7 +5856,7 @@
                     if (
                         this.compareScriptVersions(
                             remoteVersion,
-                            TODO_CLIENT_VERSION
+                            CURRENT_SCRIPT_VERSION
                         ) > 0
                     ) {
                         GM_setValue(
@@ -7405,7 +7416,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
-
+ 
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
