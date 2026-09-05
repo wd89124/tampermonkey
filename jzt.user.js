@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.40
+// @version      3.6.41
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -439,39 +439,35 @@
         }
         #jzt-update-notice {
             display: none;
-            flex: 0 0 auto;
-            padding: 0 7px 10px;
-            background: rgb(255, 245, 230);
-            box-sizing: border-box;
+            flex: 0 0 auto !important;
+            padding: 10px 20px 12px !important;
+            background: rgb(255, 245, 230) !important;
+            box-sizing: border-box !important;
         }
         #jzt-update-button {
-            width: 100%;
-            min-height: 64px;
-            padding: 8px 6px;
-            border: 4px solid #ff4d4f;
-            border-radius: 0;
-            background: rgba(255, 255, 255, 0.45);
-            color: #ff4d4f;
-            cursor: pointer;
-            font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
-            font-size: 0;
-            line-height: 1.25;
-            text-align: center;
-            box-sizing: border-box;
+            display: block !important;
+            width: calc(100% - 2px) !important;
+            height: auto !important;
+            margin: 0 1px !important;
+            padding: 12px !important;
+            border: none !important;
+            border-radius: 4px !important;
+            background: #f59e0b !important;
+            color: #fff !important;
+            box-shadow: none !important;
+            cursor: pointer !important;
+            font-family: "Microsoft YaHei", "微软雅黑", sans-serif !important;
+            font-size: 18px !important;
+            font-weight: 700 !important;
+            line-height: normal !important;
+            text-align: center !important;
+            white-space: nowrap !important;
+            box-sizing: border-box !important;
         }
         #jzt-update-button:hover,
         #jzt-update-button:focus-visible {
-            background: #fff;
-            outline: none;
-        }
-        #jzt-update-button .jzt-update-prefix {
-            font-size: 22px;
-            font-weight: 400;
-        }
-        #jzt-update-button .jzt-update-action {
-            margin-left: 2px;
-            font-size: 26px;
-            font-weight: 700;
+            background: #d97706 !important;
+            outline: none !important;
         }
         #jzt-todo-panel {
             flex: 1 1 auto !important;
@@ -574,7 +570,7 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.6.38';
+    const TODO_CLIENT_VERSION = '3.6.39';
     const SCRIPT_UPDATE_URL = 'https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.user.js';
     const SCRIPT_UPDATE_AVAILABLE_VERSION_KEY = 'jzt-script-update-available-version';
     const TODO_UPDATE_GUIDE_ORIGIN = 'https://64.90.23.77';
@@ -5986,8 +5982,7 @@
                         </div>
                         <div id="jzt-update-notice">
                             <button id="jzt-update-button" type="button" title="发现新版本，点击打开更新页面">
-                                <span class="jzt-update-prefix">有新版本，</span>
-                                <span class="jzt-update-action">点击更新</span>
+                                有新版本，点击更新
                             </button>
                         </div>
                         <div id="jzt-todo-panel">
@@ -7410,7 +7405,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
- 
+
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
