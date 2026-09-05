@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.38
+// @version      3.6.39
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -574,9 +574,8 @@
 
     const TODO_API_BASE = 'https://64.90.23.77/api/v2';
     const TODO_API_TOKEN = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
-    const TODO_CLIENT_VERSION = '3.6.37';
+    const TODO_CLIENT_VERSION = '3.6.38';
     const SCRIPT_UPDATE_URL = 'https://gh-proxy.org/https://raw.githubusercontent.com/wd89124/tampermonkey/refs/heads/main/jzt.user.js';
-    const SCRIPT_UPDATE_LAST_CHECK_DATE_KEY = 'jzt-script-update-last-check-date';
     const SCRIPT_UPDATE_AVAILABLE_VERSION_KEY = 'jzt-script-update-available-version';
     const TODO_UPDATE_GUIDE_ORIGIN = 'https://64.90.23.77';
     const TODO_UPDATE_GUIDE_PATH = '/api/v2/r/c539f198f482277d3981f2b40cdf2fa6e64506d5708a0f0e7702e8f98610ed2f';
@@ -5761,13 +5760,6 @@
             this.todoManager = new TodoManager(this);
         }
 
-        getLocalDateKey(date = new Date()) {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return year + '-' + month + '-' + day;
-        }
-
         compareScriptVersions(left, right) {
             const leftParts = String(left || '').trim().split('.');
             const rightParts = String(right || '').trim().split('.');
@@ -5821,7 +5813,7 @@
             );
         }
 
-        initDailyScriptUpdateCheck() {
+        initScriptUpdateCheck() {
             const cachedVersion = String(GM_getValue(
                 SCRIPT_UPDATE_AVAILABLE_VERSION_KEY,
                 ''
@@ -5836,11 +5828,6 @@
                 this.showScriptUpdateNotice(cachedVersion);
             } else {
                 this.hideScriptUpdateNotice();
-            }
-
-            const today = this.getLocalDateKey();
-            if (GM_getValue(SCRIPT_UPDATE_LAST_CHECK_DATE_KEY, '') === today) {
-                return;
             }
 
             GM_xmlhttpRequest({
@@ -5859,7 +5846,6 @@
                     );
                     if (!versionMatch) return;
                     const remoteVersion = versionMatch[1].trim();
-                    GM_setValue(SCRIPT_UPDATE_LAST_CHECK_DATE_KEY, today);
                     if (
                         this.compareScriptVersions(
                             remoteVersion,
@@ -6171,9 +6157,9 @@
 
             this.attachEventListeners();
             this.makeDraggable();
+            this.initScriptUpdateCheck();
             if (!this.isNoticeRootMode) {
                 this.initTabs();
-                this.initDailyScriptUpdateCheck();
                 this.todoManager.init();
                 if (this._els.todoSettings) {
                     this._els.todoSettings.addEventListener('click', () => {
