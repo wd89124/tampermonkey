@@ -7776,7 +7776,7 @@
                 });
         }
 
-        openDetailPanel(href, titleText, sourceTab) {
+        openDetailPanel(href, titleText, sourceTab, options = {}) {
             if (!href) {
                 return;
             }
@@ -7911,6 +7911,16 @@
                 <iframe class="detail-content" style="flex: 1 1 0; min-height: 0; border: none; width: 100%; height: 100%;"></iframe>
                 <div class="detail-resize-handle" style="position: absolute; bottom: 0; right: 0; width: 20px; height: 20px; cursor: nwse-resize; z-index: ${zIndex + 1}; background: transparent; border-right: 2px solid rgba(37, 99, 235, 0.35); border-bottom: 2px solid rgba(37, 99, 235, 0.35);"></div>
             `;
+
+            const initialContentIframe = detailPanel.querySelector('.detail-content');
+            if (initialContentIframe) {
+                initialContentIframe.name = panelId + '-content';
+                initialContentIframe.dataset.jztOpenerFrameName = String(
+                    options && options.openerFrameName
+                        ? options.openerFrameName
+                        : ''
+                );
+            }
 
             // 确保body存在且可见
             if (!document.body) {
@@ -8839,6 +8849,161 @@
             this.updateDetailButtons();
         }
 
+        shouldKeepNativeDetailPopup(url, titleText) {
+            const title = String(titleText || '').replace(/\s+/g, ' ').trim();
+            if (/(?:下载|保存文件)/.test(title)) return true;
+            try {
+                const parsed = new URL(String(url || ''), window.location.href);
+                return /\.(?:7z|zip|rar|pdf|docx?|xlsx?|pptx?|csv|txt|jpe?g|png|gif|bmp|webp)(?:$|[?#])/i.test(
+                    parsed.pathname + parsed.search + parsed.hash
+                );
+            } catch (error) {
+                return false;
+            }
+        }
+
+        installDetailWindowOpenBridge(panelId, contentIframe, iframeDoc, sourceTab, fallbackUrl) {
+            if (!iframeDoc || !iframeDoc.documentElement) return;
+            const bridgeAttribute = 'data-jzt-window-open-bridge';
+            if (iframeDoc.documentElement.hasAttribute(bridgeAttribute)) return;
+            iframeDoc.documentElement.setAttribute(bridgeAttribute, '1');
+
+            const eventName = 'jzt-script-open-detail-request';
+            const closeEventName = 'jzt-script-close-detail-request';
+            iframeDoc.addEventListener(eventName, (event) => {
+                const detail = event && event.detail ? event.detail : {};
+                const requestedUrl = String(detail.url || '').trim();
+                if (!requestedUrl) return;
+                const iframeBaseUrl = contentIframe.contentWindow?.location?.href || fallbackUrl;
+                const fullPopupUrl = this.resolveModuleUrl(
+                    requestedUrl,
+                    sourceTab,
+                    iframeBaseUrl
+                );
+                const popupTitle = String(detail.title || '').trim().slice(0, 50) || '详情';
+                if (
+                    !fullPopupUrl
+                    || this.shouldKeepNativeDetailPopup(fullPopupUrl, popupTitle)
+                ) return;
+
+                event.preventDefault();
+                event.stopPropagation();
+                const childPanelId = this.openDetailPanel(
+                    fullPopupUrl,
+                    popupTitle,
+                    sourceTab,
+                    { openerFrameName: contentIframe.name }
+                );
+                const childPanel = this.detailPanels.get(childPanelId);
+                const childIframe = childPanel
+                    ? childPanel.querySelector('.detail-content')
+                    : null;
+                if (childIframe && event.detail) {
+                    event.detail.popupFrameName = childIframe.name;
+                }
+            }, true);
+            iframeDoc.addEventListener(closeEventName, (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.closeDetailPanelById(panelId);
+            }, true);
+
+            // Tampermonkey 存在隔离世界；向 iframe 页面注入桥接，才能接管原系统内联脚本中的 window.open。
+            const bridgeScript = iframeDoc.createElement('script');
+            const openerFrameName = String(
+                contentIframe.dataset.jztOpenerFrameName || ''
+            );
+            bridgeScript.textContent = `(() => {
+                if (window.__jztWindowOpenBridgeInstalled) return;
+                window.__jztWindowOpenBridgeInstalled = true;
+                const nativeOpen = window.open.bind(window);
+                const nativeClose = window.close.bind(window);
+                window.__jztNativeWindowOpen = nativeOpen;
+                window.__jztNativeWindowClose = nativeClose;
+                const openerFrameName = ${JSON.stringify(openerFrameName)};
+                if (openerFrameName) {
+                    try {
+                        Object.defineProperty(window, 'opener', {
+                            configurable: true,
+                            get() {
+                                try {
+                                    return window.parent.frames[openerFrameName] || null;
+                                } catch (error) {
+                                    return null;
+                                }
+                            }
+                        });
+                    } catch (error) {}
+                }
+                window.open = function(url, target, features) {
+                    const rawUrl = String(url == null ? '' : url).trim();
+                    const targetName = String(target || '').toLowerCase();
+                    if (
+                        !rawUrl
+                        || rawUrl === 'about:blank'
+                        || targetName === '_self'
+                        || targetName === '_top'
+                        || targetName === '_parent'
+                    ) {
+                        return nativeOpen(url, target, features);
+                    }
+                    let absoluteUrl = rawUrl;
+                    try {
+                        absoluteUrl = new URL(rawUrl, window.location.href).href;
+                    } catch (error) {
+                        return nativeOpen(url, target, features);
+                    }
+                    const sourceEvent = window.event;
+                    const trigger = sourceEvent && (sourceEvent.target || sourceEvent.srcElement)
+                        ? (sourceEvent.target || sourceEvent.srcElement)
+                        : document.activeElement;
+                    const triggerTitle = trigger
+                        ? String(
+                            trigger.value
+                            || trigger.innerText
+                            || trigger.textContent
+                            || trigger.title
+                            || ''
+                        ).replace(/\\s+/g, ' ').trim()
+                        : '';
+                    const request = new CustomEvent(${JSON.stringify(eventName)}, {
+                        bubbles: false,
+                        cancelable: true,
+                        detail: {
+                            url: absoluteUrl,
+                            title: triggerTitle || String(target || '').trim() || '详情'
+                        }
+                    });
+                    const handled = !document.dispatchEvent(request);
+                    if (!handled) return nativeOpen(url, target, features);
+                    const popupFrameName = request.detail && request.detail.popupFrameName;
+                    if (popupFrameName) {
+                        try {
+                            const popupWindow = window.parent.frames[popupFrameName];
+                            if (popupWindow) return popupWindow;
+                        } catch (error) {}
+                    }
+                    return {
+                        closed: false,
+                        opener: window,
+                        focus() {},
+                        blur() {},
+                        close() { this.closed = true; }
+                    };
+                };
+                window.close = function() {
+                    const request = new CustomEvent(${JSON.stringify(closeEventName)}, {
+                        bubbles: false,
+                        cancelable: true
+                    });
+                    const handled = !document.dispatchEvent(request);
+                    if (!handled) return nativeClose();
+                };
+            })();`;
+            (iframeDoc.head || iframeDoc.documentElement).appendChild(bridgeScript);
+            bridgeScript.remove();
+        }
+
         loadDetailContentById(panelId, href, sourceTab) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
@@ -8882,6 +9047,13 @@
 
                         // 弹窗内链接统一在新弹窗中打开，不新开浏览器标签（支持多级弹窗）
                         const self = this;
+                        this.installDetailWindowOpenBridge(
+                            panelId,
+                            contentIframe,
+                            iframeDoc,
+                            sourceTab,
+                            fullUrl
+                        );
                         if (!iframeDoc.body.hasAttribute('data-jigui-link-intercept')) {
                             iframeDoc.body.setAttribute('data-jigui-link-intercept', '1');
                             iframeDoc.body.addEventListener('click', function(e) {
