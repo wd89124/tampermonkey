@@ -5812,12 +5812,63 @@
         }
 
         openScriptUpdatePage() {
+            this.armScriptUpdateResultCheck();
             const separator = SCRIPT_UPDATE_URL.includes('?') ? '&' : '?';
             window.open(
                 SCRIPT_UPDATE_URL + separator + '_jzt_update=' + Date.now(),
                 '_blank',
                 'noopener,noreferrer'
             );
+        }
+
+        armScriptUpdateResultCheck() {
+            if (typeof this.scriptUpdateReturnCleanup === 'function') {
+                this.scriptUpdateReturnCleanup();
+            }
+
+            let hasLeftCurrentPage = false;
+            let isReloading = false;
+            const startedAt = Date.now();
+            const markPageLeft = () => {
+                hasLeftCurrentPage = true;
+            };
+            const reloadToConfirmUpdate = () => {
+                if (
+                    !hasLeftCurrentPage
+                    || isReloading
+                    || Date.now() - startedAt < 500
+                ) return;
+                isReloading = true;
+                if (typeof this.scriptUpdateReturnCleanup === 'function') {
+                    this.scriptUpdateReturnCleanup();
+                }
+                const button = this._els && this._els.updateButton;
+                if (button) {
+                    button.textContent = '正在确认更新...';
+                    button.disabled = true;
+                }
+                window.setTimeout(() => window.location.reload(), 300);
+            };
+            const handleVisibilityChange = () => {
+                if (document.visibilityState === 'hidden') {
+                    markPageLeft();
+                    return;
+                }
+                reloadToConfirmUpdate();
+            };
+
+            window.addEventListener('blur', markPageLeft);
+            window.addEventListener('focus', reloadToConfirmUpdate);
+            document.addEventListener('visibilitychange', handleVisibilityChange);
+            this.scriptUpdateReturnCleanup = () => {
+                window.removeEventListener('blur', markPageLeft);
+                window.removeEventListener('focus', reloadToConfirmUpdate);
+                document.removeEventListener(
+                    'visibilitychange',
+                    handleVisibilityChange
+                );
+                this.scriptUpdateReturnCleanup = null;
+            };
         }
 
         initScriptUpdateCheck() {
