@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.46
+// @version      3.6.52
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -242,18 +242,57 @@
             text-overflow: ellipsis !important;
             white-space: nowrap !important;
         }
+        #jzt-profile-actions {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-end !important;
+            gap: 7px !important;
+            flex: 0 0 auto !important;
+        }
         #jzt-todo-settings {
-            width: 49px !important;
+            width: 38px !important;
             height: 49px !important;
-            flex: 0 0 49px !important;
+            flex: 0 0 38px !important;
             border: none !important;
             background: rgb(255, 245, 230) !important;
-            color: #2563eb !important;
+            color: #7b8794 !important;
             cursor: pointer !important;
-            font-size: 26px !important;
-            line-height: 49px !important;
             padding: 0 !important;
-            text-align: center !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+        #jzt-todo-settings svg {
+            display: block !important;
+            width: 30px !important;
+            height: 30px !important;
+        }
+        #jzt-feedback-button {
+            width: 42px !important;
+            height: 49px !important;
+            flex: 0 0 42px !important;
+            padding: 2px 0 0 !important;
+            border: none !important;
+            background: transparent !important;
+            color: #0066cc !important;
+            cursor: pointer !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            justify-content: center !important;
+            font-family: "Microsoft YaHei", "微软雅黑", sans-serif !important;
+            font-size: 15px !important;
+            font-weight: 400 !important;
+            line-height: 1.25 !important;
+            text-align: left !important;
+            text-decoration: underline !important;
+            text-underline-offset: 2px !important;
+        }
+        #jzt-feedback-button:hover,
+        #jzt-feedback-button:focus-visible {
+            color: #174dbb !important;
+            text-decoration: underline !important;
+            outline: none !important;
         }
         #jzt-search-section {
             flex: 0 0 auto !important;
@@ -642,6 +681,10 @@
             this.userDirectoryCachedAt = directoryCache.cachedAt;
             this.userDirectoryPromise = null;
             this.noticeCopySession = null;
+            this.automationDocuments = new WeakSet();
+            this.automationCompletingTaskIds = new Set();
+            this.automationCompletedTaskIds = new Set();
+            this.automationTimeouts = new Map();
             this.initialized = false;
         }
 
@@ -1459,6 +1502,313 @@
             });
         }
 
+        readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onerror = () => reject(new Error('无法读取附件'));
+                reader.onload = () => {
+                    try {
+                        const bytes = new Uint8Array(reader.result);
+                        const chunkSize = 32768;
+                        let binary = '';
+                        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                            binary += String.fromCharCode.apply(
+                                null,
+                                bytes.subarray(offset, offset + chunkSize)
+                            );
+                        }
+                        resolve(window.btoa(binary));
+                    } catch (error) {
+                        reject(new Error('附件编码失败'));
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        getPanelAutomationTask(panel) {
+            if (!panel || !panel.dataset) return null;
+            const id = String(panel.dataset.todoSourceTaskId || '').trim();
+            const taskType = String(panel.dataset.todoSourceTaskType || '').trim();
+            const docNo = String(panel.dataset.todoSourceTaskDocNo || '').trim();
+            if (!id || !['待会签', '待校核', '待批准'].includes(taskType)) return null;
+            const currentTask = this.tasks.find((item) => item.id === id);
+            return currentTask || { id, taskType, docNo };
+        }
+
+        getAutomationActionWords(taskType) {
+            if (taskType === '待会签') return ['会签'];
+            if (taskType === '待批准') return ['批准', '审批'];
+            return ['校核'];
+        }
+
+        getAutomationPagePath(url) {
+            try {
+                return new URL(String(url || ''), window.location.href).pathname;
+            } catch (error) {
+                return '';
+            }
+        }
+
+        recordAutomationEvent(task, eventType, detectionMethod, pageUrl, resultDetail) {
+            if (!task || !task.id || !this.profile) return Promise.resolve();
+            return this.request(
+                'POST',
+                '/tasks/' + encodeURIComponent(task.id) + '/automation-events',
+                {
+                    eventType,
+                    detectionMethod: detectionMethod || '',
+                    clientVersion: TODO_CLIENT_VERSION,
+                    pagePath: this.getAutomationPagePath(pageUrl),
+                    resultDetail: String(resultDetail || '').slice(0, 120)
+                }
+            ).catch((error) => {
+                console.warn('[待办自动回传] 审计记录失败:', error.message);
+            });
+        }
+
+        clearAutomationTimeouts(taskId) {
+            const prefix = String(taskId || '') + ':';
+            for (const [key, timer] of this.automationTimeouts.entries()) {
+                if (!key.startsWith(prefix)) continue;
+                window.clearTimeout(timer);
+                this.automationTimeouts.delete(key);
+            }
+        }
+
+        scheduleAutomationTimeout(panel, task, pageUrl) {
+            if (!panel || !task || !task.id) return;
+            const key = task.id + ':' + panel.id;
+            const oldTimer = this.automationTimeouts.get(key);
+            if (oldTimer) window.clearTimeout(oldTimer);
+            const timer = window.setTimeout(() => {
+                this.automationTimeouts.delete(key);
+                if (
+                    this.automationCompletedTaskIds.has(task.id)
+                    || panel.dataset.todoAutomationSuccess === '1'
+                ) return;
+                this.recordAutomationEvent(
+                    task,
+                    'confirmation_timeout',
+                    'timeout',
+                    pageUrl,
+                    '未检测到成功结果，保留手动完成按钮'
+                );
+            }, 30 * 60 * 1000);
+            this.automationTimeouts.set(key, timer);
+        }
+
+        showAutomationState(panel, message, isError) {
+            if (!panel) return;
+            let state = panel.querySelector('.detail-automation-state');
+            if (!state) {
+                state = document.createElement('div');
+                state.className = 'detail-automation-state';
+                state.style.cssText = [
+                    'position:absolute',
+                    'top:46px',
+                    'right:12px',
+                    'z-index:20',
+                    'max-width:360px',
+                    'padding:8px 12px',
+                    'border-radius:5px',
+                    'color:#fff',
+                    'font-size:13px',
+                    'font-weight:700',
+                    'box-shadow:0 4px 14px rgba(15,23,42,.2)',
+                    'pointer-events:none'
+                ].join(';');
+                panel.appendChild(state);
+            }
+            state.style.background = isError ? '#dc2626' : '#15803d';
+            state.textContent = message;
+            state.style.display = 'block';
+            window.setTimeout(() => {
+                if (state && state.parentNode) state.style.display = 'none';
+            }, isError ? 8000 : 5000);
+        }
+
+        markAutomationAction(panel, task, iframeDoc, pageUrl, descriptor) {
+            if (!panel || !task) return;
+            const now = Date.now();
+            const previous = Number(panel.dataset.todoAutomationActionAt || 0);
+            panel.dataset.todoAutomationActionAt = String(now);
+            panel.dataset.todoAutomationActionType = task.taskType;
+            panel.dataset.todoAutomationSuccess = '';
+            this.scheduleAutomationTimeout(panel, task, pageUrl);
+            if (now - previous < 3000) return;
+            this.recordAutomationEvent(
+                task,
+                'action_detected',
+                'button-click',
+                pageUrl,
+                task.taskType
+            );
+            console.info('[待办自动回传] 已检测到操作:', task.taskType, descriptor);
+        }
+
+        bindTaskAutomationActions(panel, iframeDoc, pageUrl) {
+            const task = this.getPanelAutomationTask(panel);
+            if (!task || !iframeDoc || this.automationDocuments.has(iframeDoc)) return;
+            this.automationDocuments.add(iframeDoc);
+            iframeDoc.addEventListener('click', (event) => {
+                const target = event && event.target;
+                if (!target || typeof target.closest !== 'function') return;
+                const control = target.closest(
+                    'a,button,input[type="button"],input[type="submit"],[onclick]'
+                );
+                if (!control) return;
+                const descriptor = [
+                    control.value,
+                    control.innerText,
+                    control.textContent,
+                    control.title,
+                    control.name,
+                    control.id,
+                    control.getAttribute && control.getAttribute('onclick'),
+                    control.getAttribute && control.getAttribute('href')
+                ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+                const compact = descriptor.replace(/\s+/g, '');
+                if (!compact || /取消|返回|关闭|查看|浏览|记录/.test(compact)) return;
+                const matched = this.getAutomationActionWords(task.taskType)
+                    .some((word) => compact.includes(word));
+                if (!matched) return;
+                let actualPageUrl = pageUrl;
+                try {
+                    actualPageUrl = iframeDoc.location.href || pageUrl;
+                } catch (error) {}
+                this.markAutomationAction(
+                    panel,
+                    task,
+                    iframeDoc,
+                    actualPageUrl,
+                    descriptor
+                );
+            }, true);
+        }
+
+        getTaskDetailCompletion(task, iframeDoc) {
+            if (!task || !iframeDoc) return false;
+            const config = {
+                '待校核': { labels: ['校核'], pending: /未校核|待校核/ },
+                '待会签': { labels: ['会签', '项目部会签'], pending: /未会签|待会签/ },
+                '待批准': { labels: ['批准', '审批'], pending: /未批准|待批准|未审批|待审批/ }
+            }[task.taskType];
+            if (!config) return false;
+            const value = this.extractLabelValue(iframeDoc, config.labels)
+                .replace(/\u00a0/g, '')
+                .replace(/\s+/g, '')
+                .trim();
+            return Boolean(value) && !config.pending.test(value);
+        }
+
+        autoCompleteTask(task, source, detectionMethod, pageUrl, panel) {
+            if (
+                !task
+                || !task.id
+                || this.automationCompletingTaskIds.has(task.id)
+                || this.automationCompletedTaskIds.has(task.id)
+            ) return;
+            this.automationCompletingTaskIds.add(task.id);
+            this.clearAutomationTimeouts(task.id);
+            this.showAutomationState(panel, '已确认完成，正在自动回传待办…', false);
+            this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/complete', {
+                source
+            }).then(() => {
+                this.automationCompletingTaskIds.delete(task.id);
+                this.automationCompletedTaskIds.add(task.id);
+                this.tasks = this.tasks.filter((item) => item.id !== task.id);
+                this.renderTasks();
+                this.showAutomationState(panel, '待办已自动完成并回传', false);
+                this.recordAutomationEvent(
+                    task,
+                    'complete_succeeded',
+                    'server-response',
+                    pageUrl,
+                    source
+                );
+                return this.refreshTasks(false);
+            }).catch((error) => {
+                this.automationCompletingTaskIds.delete(task.id);
+                this.showAutomationState(
+                    panel,
+                    '自动回传失败，左侧仍可手动完成',
+                    true
+                );
+                this.recordAutomationEvent(
+                    task,
+                    'complete_failed',
+                    'server-response',
+                    pageUrl,
+                    error.message
+                );
+                console.warn('[待办自动回传] 完成失败:', error.message);
+            });
+        }
+
+        handleTaskAutomationLoaded(panel, iframe, iframeDoc, pageUrl) {
+            const task = this.getPanelAutomationTask(panel);
+            if (!task || !iframeDoc || !iframeDoc.body) return;
+            this.bindTaskAutomationActions(panel, iframeDoc, pageUrl);
+
+            const docNo = this.extractDocNo(panel, iframeDoc);
+            if (
+                docNo
+                && docNo === task.docNo
+                && this.getTaskDetailCompletion(task, iframeDoc)
+            ) {
+                if (panel.dataset.todoAutomationStatusLogged !== '1') {
+                    panel.dataset.todoAutomationStatusLogged = '1';
+                    this.recordAutomationEvent(
+                        task,
+                        'status_confirmed',
+                        'detail-status',
+                        pageUrl,
+                        task.taskType
+                    );
+                }
+                this.autoCompleteTask(
+                    task,
+                    'auto-detail-status',
+                    'detail-status',
+                    pageUrl,
+                    panel
+                );
+                return;
+            }
+
+            const actionAt = Number(panel.dataset.todoAutomationActionAt || 0);
+            const actionArmed = actionAt > 0 && Date.now() - actionAt < 2 * 60 * 60 * 1000;
+            if (!actionArmed) return;
+            const text = String(iframeDoc.body.innerText || iframeDoc.body.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, '')
+                .trim();
+            const hasFailure = /失败|不成功|未成功|错误|无权限/.test(text);
+            const hasSuccess = /成功|办理完成|操作完成|提交完成/.test(text);
+            const looksLikeResult = text.length <= 3000 || /恭喜|关闭|返回/.test(text);
+            if (hasFailure || !hasSuccess || !looksLikeResult) return;
+
+            panel.dataset.todoAutomationSuccess = '1';
+            if (panel.dataset.todoAutomationSuccessLogged !== '1') {
+                panel.dataset.todoAutomationSuccessLogged = '1';
+                this.recordAutomationEvent(
+                    task,
+                    'success_detected',
+                    'success-text',
+                    pageUrl,
+                    task.taskType
+                );
+            }
+            this.autoCompleteTask(
+                task,
+                'auto-success-page',
+                'success-text',
+                pageUrl,
+                panel
+            );
+        }
+
         closeTracking(tracking, event, button) {
             if (event) {
                 event.preventDefault();
@@ -1491,7 +1841,12 @@
             this.searchPanel.openDetailPanel(
                 task.url,
                 task.docNo,
-                this.getSourceTabFromUrl(task.url)
+                this.getSourceTabFromUrl(task.url),
+                {
+                    todoTaskId: task.id,
+                    todoTaskType: task.taskType,
+                    todoTaskDocNo: task.docNo
+                }
             );
         }
 
@@ -1561,6 +1916,155 @@
                 settingsButton.disabled = !canOpenSettings;
                 settingsButton.style.opacity = canOpenSettings ? '1' : '0.45';
             }
+            const feedbackButton = this.searchPanel._els && this.searchPanel._els.feedbackButton;
+            if (feedbackButton) {
+                const canSubmitFeedback = !!(this.profile && this.identityReady);
+                feedbackButton.disabled = !canSubmitFeedback;
+                feedbackButton.style.opacity = canSubmitFeedback ? '1' : '0.45';
+            }
+        }
+
+        openFeedbackDialog() {
+            if (!this.profile || !this.identityReady) {
+                window.alert('请先完成待办身份设置，再提交BUG或建议。');
+                return;
+            }
+            const old = document.getElementById('jzt-feedback-dialog-overlay');
+            if (old) old.remove();
+
+            const overlay = document.createElement('div');
+            overlay.id = 'jzt-feedback-dialog-overlay';
+            overlay.style.cssText = [
+                'position:fixed',
+                'inset:0',
+                'z-index:315000',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'background:rgba(15,23,42,.45)',
+                'font-family:Microsoft YaHei,微软雅黑,sans-serif'
+            ].join(';');
+
+            const dialog = document.createElement('div');
+            dialog.style.cssText = [
+                'width:480px',
+                'max-width:calc(100vw - 36px)',
+                'background:#fff',
+                'border:1px solid #dbe3ef',
+                'box-shadow:0 16px 40px rgba(15,23,42,.2)',
+                'overflow:hidden'
+            ].join(';');
+            dialog.innerHTML = `
+                <div style="height:42px;padding:0 12px 0 16px;background:#1e50dc;color:#fff;display:flex;align-items:center;justify-content:space-between;">
+                    <strong style="font-size:16px;">提交BUG或建议</strong>
+                    <button type="button" data-action="close" title="关闭" style="width:30px;height:30px;border:0;background:transparent;color:#fff;font-size:24px;line-height:28px;cursor:pointer;">×</button>
+                </div>
+                <div style="padding:18px 20px 20px;">
+                    <label style="display:block;margin-bottom:7px;color:#374151;font-size:13px;">类型</label>
+                    <select data-field="category" style="width:100%;height:38px;padding:0 10px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;font:14px Microsoft YaHei,微软雅黑,sans-serif;">
+                        <option value="BUG">BUG</option>
+                        <option value="建议">建议</option>
+                    </select>
+                    <label style="display:block;margin:15px 0 7px;color:#374151;font-size:13px;">内容</label>
+                    <textarea data-field="content" maxlength="2000" placeholder="请描述遇到的问题、操作步骤或改进建议" style="display:block;width:100%;height:150px;padding:10px 11px;border:1px solid #cbd5e1;border-radius:5px;resize:vertical;box-sizing:border-box;font:14px/1.6 Microsoft YaHei,微软雅黑,sans-serif;"></textarea>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px;">
+                        <span data-field="status" style="color:#64748b;font-size:12px;"></span>
+                        <span data-field="count" style="color:#94a3b8;font-size:12px;">0/2000</span>
+                    </div>
+                    <label style="display:block;margin:14px 0 7px;color:#374151;font-size:13px;">附件（可选，最大5MB）</label>
+                    <input data-field="attachment" type="file" accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar,.7z" style="display:block;width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;box-sizing:border-box;font:13px Microsoft YaHei,微软雅黑,sans-serif;">
+                    <div data-field="attachment-hint" style="margin-top:5px;color:#94a3b8;font-size:12px;">支持图片、Office文档、PDF、文本和压缩包</div>
+                    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
+                        <button type="button" data-action="cancel" style="height:36px;padding:0 18px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;color:#334155;cursor:pointer;font-family:inherit;">取消</button>
+                        <button type="button" data-action="submit" style="height:36px;padding:0 20px;border:0;border-radius:5px;background:#2563eb;color:#fff;cursor:pointer;font-family:inherit;font-weight:700;">提交</button>
+                    </div>
+                </div>
+            `;
+            overlay.appendChild(dialog);
+            document.body.appendChild(overlay);
+
+            const category = dialog.querySelector('[data-field="category"]');
+            const content = dialog.querySelector('[data-field="content"]');
+            const status = dialog.querySelector('[data-field="status"]');
+            const count = dialog.querySelector('[data-field="count"]');
+            const attachment = dialog.querySelector('[data-field="attachment"]');
+            const attachmentHint = dialog.querySelector('[data-field="attachment-hint"]');
+            const submit = dialog.querySelector('[data-action="submit"]');
+            const handleKeydown = (event) => {
+                if (event.key === 'Escape') close();
+            };
+            const close = () => {
+                document.removeEventListener('keydown', handleKeydown, true);
+                overlay.remove();
+            };
+            dialog.querySelector('[data-action="close"]').addEventListener('click', close);
+            dialog.querySelector('[data-action="cancel"]').addEventListener('click', close);
+            overlay.addEventListener('mousedown', (event) => {
+                if (event.target === overlay) close();
+            });
+            document.addEventListener('keydown', handleKeydown, true);
+            content.addEventListener('input', () => {
+                count.textContent = String(content.value.length) + '/2000';
+                if (status.textContent) status.textContent = '';
+            });
+            attachment.addEventListener('change', () => {
+                const file = attachment.files && attachment.files[0];
+                attachmentHint.textContent = file
+                    ? file.name + '（' + Math.ceil(file.size / 1024) + 'KB）'
+                    : '支持图片、Office文档、PDF、文本和压缩包';
+                attachmentHint.style.color = file && file.size > 5 * 1024 * 1024
+                    ? '#dc2626'
+                    : '#94a3b8';
+                if (status.textContent) status.textContent = '';
+            });
+            submit.addEventListener('click', () => {
+                const feedbackContent = content.value.trim();
+                if (!feedbackContent) {
+                    status.textContent = '请输入BUG或建议内容。';
+                    status.style.color = '#dc2626';
+                    content.focus();
+                    return;
+                }
+                const file = attachment.files && attachment.files[0];
+                if (file && file.size > 5 * 1024 * 1024) {
+                    status.textContent = '附件不能超过5MB。';
+                    status.style.color = '#dc2626';
+                    return;
+                }
+                submit.disabled = true;
+                submit.textContent = file ? '读取附件…' : '提交中…';
+                status.textContent = '';
+                const payload = {
+                    category: category.value,
+                    content: feedbackContent,
+                    clientVersion: TODO_CLIENT_VERSION
+                };
+                const preparePayload = file
+                    ? this.readFileAsBase64(file).then((dataBase64) => {
+                        payload.attachment = {
+                            name: file.name,
+                            type: file.type || 'application/octet-stream',
+                            dataBase64
+                        };
+                        submit.textContent = '上传中…';
+                        return payload;
+                    })
+                    : Promise.resolve(payload);
+                preparePayload.then((preparedPayload) => {
+                    return this.request('POST', '/feedback', preparedPayload);
+                }).then(() => {
+                    status.textContent = '提交成功，感谢反馈。';
+                    status.style.color = '#15803d';
+                    submit.textContent = '已提交';
+                    window.setTimeout(close, 900);
+                }).catch((error) => {
+                    status.textContent = '提交失败：' + error.message;
+                    status.style.color = '#dc2626';
+                    submit.disabled = false;
+                    submit.textContent = '提交';
+                });
+            });
+            window.setTimeout(() => content.focus(), 30);
         }
 
         openIdentityDialog(isFirstSetup) {
@@ -1772,6 +2276,12 @@
             try {
                 actualUrl = iframe.contentWindow.location.href || fallbackUrl;
             } catch (e) {}
+            this.handleTaskAutomationLoaded(
+                panel,
+                iframe,
+                iframeDoc,
+                actualUrl
+            );
             this.updateTakeNoButton(panel, actualUrl);
             this.updateCopyNoticeButton(panel, actualUrl, iframeDoc);
             this.resumeNoticeCopySession(panel, iframeDoc, actualUrl);
@@ -1809,7 +2319,9 @@
                     });
                 }
                 : null;
-            this.syncCompletedTasks(docNo, iframeDoc);
+            if (!panel.dataset.todoSourceTaskId) {
+                this.syncCompletedTasks(docNo, iframeDoc);
+            }
         }
 
         updateTakeNoButton(panel, actualUrl) {
@@ -6055,7 +6567,15 @@
                                 <div id="jzt-todo-user">待办身份未设置</div>
                                 <div id="jzt-todo-department">请点击右侧设置</div>
                             </div>
-                            <button id="jzt-todo-settings" type="button" title="修改姓名、部门和待办接收设置">⚙</button>
+                            <div id="jzt-profile-actions">
+                                <button id="jzt-todo-settings" type="button" title="修改姓名、部门和待办接收设置" aria-label="设置">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/>
+                                        <circle cx="12" cy="12" r="3"/>
+                                    </svg>
+                                </button>
+                                <button id="jzt-feedback-button" type="button" title="提交BUG或改进建议"><span>BUG</span><span>建议</span></button>
+                            </div>
                         </div>
                     </div>
                     <div id="search-result-area" style="flex: 1; padding: 20px; background: #fff5e6; overflow: hidden; display: flex; flex-direction: column; min-height: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">
@@ -6131,7 +6651,8 @@
                 todoList: panel.querySelector('#jzt-todo-list'),
                 todoUser: panel.querySelector('#jzt-todo-user'),
                 todoDepartment: panel.querySelector('#jzt-todo-department'),
-                todoSettings: panel.querySelector('#jzt-todo-settings')
+                todoSettings: panel.querySelector('#jzt-todo-settings'),
+                feedbackButton: panel.querySelector('#jzt-feedback-button')
             };
 
             // 确保面板显示
@@ -6225,6 +6746,11 @@
                         } else {
                             this.todoManager.openIdentityDialog(true);
                         }
+                    });
+                }
+                if (this._els.feedbackButton) {
+                    this._els.feedbackButton.addEventListener('click', () => {
+                        this.todoManager.openFeedbackDialog();
                     });
                 }
             }
@@ -7467,7 +7993,7 @@
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
             this.currentDisplayedPage = currentPage;
- 
+
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -7848,6 +8374,20 @@
             const detailPanel = document.createElement('div');
             detailPanel.id = panelId;
             detailPanel.dataset.panelId = panelId;
+            detailPanel.dataset.todoSourceTaskId = String(
+                options && options.todoTaskId ? options.todoTaskId : ''
+            );
+            detailPanel.dataset.todoSourceTaskType = String(
+                options && options.todoTaskType ? options.todoTaskType : ''
+            );
+            detailPanel.dataset.todoSourceTaskDocNo = String(
+                options && options.todoTaskDocNo ? options.todoTaskDocNo : ''
+            );
+            detailPanel.dataset.todoAutomationActionAt = String(
+                options && options.todoAutomationActionAt
+                    ? options.todoAutomationActionAt
+                    : ''
+            );
             detailPanel.style.cssText = `
                 position: fixed !important;
                 top: ${top}px !important;
@@ -7911,16 +8451,6 @@
                 <iframe class="detail-content" style="flex: 1 1 0; min-height: 0; border: none; width: 100%; height: 100%;"></iframe>
                 <div class="detail-resize-handle" style="position: absolute; bottom: 0; right: 0; width: 20px; height: 20px; cursor: nwse-resize; z-index: ${zIndex + 1}; background: transparent; border-right: 2px solid rgba(37, 99, 235, 0.35); border-bottom: 2px solid rgba(37, 99, 235, 0.35);"></div>
             `;
-
-            const initialContentIframe = detailPanel.querySelector('.detail-content');
-            if (initialContentIframe) {
-                initialContentIframe.name = panelId + '-content';
-                initialContentIframe.dataset.jztOpenerFrameName = String(
-                    options && options.openerFrameName
-                        ? options.openerFrameName
-                        : ''
-                );
-            }
 
             // 确保body存在且可见
             if (!document.body) {
@@ -8849,161 +9379,6 @@
             this.updateDetailButtons();
         }
 
-        shouldKeepNativeDetailPopup(url, titleText) {
-            const title = String(titleText || '').replace(/\s+/g, ' ').trim();
-            if (/(?:下载|保存文件)/.test(title)) return true;
-            try {
-                const parsed = new URL(String(url || ''), window.location.href);
-                return /\.(?:7z|zip|rar|pdf|docx?|xlsx?|pptx?|csv|txt|jpe?g|png|gif|bmp|webp)(?:$|[?#])/i.test(
-                    parsed.pathname + parsed.search + parsed.hash
-                );
-            } catch (error) {
-                return false;
-            }
-        }
-
-        installDetailWindowOpenBridge(panelId, contentIframe, iframeDoc, sourceTab, fallbackUrl) {
-            if (!iframeDoc || !iframeDoc.documentElement) return;
-            const bridgeAttribute = 'data-jzt-window-open-bridge';
-            if (iframeDoc.documentElement.hasAttribute(bridgeAttribute)) return;
-            iframeDoc.documentElement.setAttribute(bridgeAttribute, '1');
-
-            const eventName = 'jzt-script-open-detail-request';
-            const closeEventName = 'jzt-script-close-detail-request';
-            iframeDoc.addEventListener(eventName, (event) => {
-                const detail = event && event.detail ? event.detail : {};
-                const requestedUrl = String(detail.url || '').trim();
-                if (!requestedUrl) return;
-                const iframeBaseUrl = contentIframe.contentWindow?.location?.href || fallbackUrl;
-                const fullPopupUrl = this.resolveModuleUrl(
-                    requestedUrl,
-                    sourceTab,
-                    iframeBaseUrl
-                );
-                const popupTitle = String(detail.title || '').trim().slice(0, 50) || '详情';
-                if (
-                    !fullPopupUrl
-                    || this.shouldKeepNativeDetailPopup(fullPopupUrl, popupTitle)
-                ) return;
-
-                event.preventDefault();
-                event.stopPropagation();
-                const childPanelId = this.openDetailPanel(
-                    fullPopupUrl,
-                    popupTitle,
-                    sourceTab,
-                    { openerFrameName: contentIframe.name }
-                );
-                const childPanel = this.detailPanels.get(childPanelId);
-                const childIframe = childPanel
-                    ? childPanel.querySelector('.detail-content')
-                    : null;
-                if (childIframe && event.detail) {
-                    event.detail.popupFrameName = childIframe.name;
-                }
-            }, true);
-            iframeDoc.addEventListener(closeEventName, (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.closeDetailPanelById(panelId);
-            }, true);
-
-            // Tampermonkey 存在隔离世界；向 iframe 页面注入桥接，才能接管原系统内联脚本中的 window.open。
-            const bridgeScript = iframeDoc.createElement('script');
-            const openerFrameName = String(
-                contentIframe.dataset.jztOpenerFrameName || ''
-            );
-            bridgeScript.textContent = `(() => {
-                if (window.__jztWindowOpenBridgeInstalled) return;
-                window.__jztWindowOpenBridgeInstalled = true;
-                const nativeOpen = window.open.bind(window);
-                const nativeClose = window.close.bind(window);
-                window.__jztNativeWindowOpen = nativeOpen;
-                window.__jztNativeWindowClose = nativeClose;
-                const openerFrameName = ${JSON.stringify(openerFrameName)};
-                if (openerFrameName) {
-                    try {
-                        Object.defineProperty(window, 'opener', {
-                            configurable: true,
-                            get() {
-                                try {
-                                    return window.parent.frames[openerFrameName] || null;
-                                } catch (error) {
-                                    return null;
-                                }
-                            }
-                        });
-                    } catch (error) {}
-                }
-                window.open = function(url, target, features) {
-                    const rawUrl = String(url == null ? '' : url).trim();
-                    const targetName = String(target || '').toLowerCase();
-                    if (
-                        !rawUrl
-                        || rawUrl === 'about:blank'
-                        || targetName === '_self'
-                        || targetName === '_top'
-                        || targetName === '_parent'
-                    ) {
-                        return nativeOpen(url, target, features);
-                    }
-                    let absoluteUrl = rawUrl;
-                    try {
-                        absoluteUrl = new URL(rawUrl, window.location.href).href;
-                    } catch (error) {
-                        return nativeOpen(url, target, features);
-                    }
-                    const sourceEvent = window.event;
-                    const trigger = sourceEvent && (sourceEvent.target || sourceEvent.srcElement)
-                        ? (sourceEvent.target || sourceEvent.srcElement)
-                        : document.activeElement;
-                    const triggerTitle = trigger
-                        ? String(
-                            trigger.value
-                            || trigger.innerText
-                            || trigger.textContent
-                            || trigger.title
-                            || ''
-                        ).replace(/\\s+/g, ' ').trim()
-                        : '';
-                    const request = new CustomEvent(${JSON.stringify(eventName)}, {
-                        bubbles: false,
-                        cancelable: true,
-                        detail: {
-                            url: absoluteUrl,
-                            title: triggerTitle || String(target || '').trim() || '详情'
-                        }
-                    });
-                    const handled = !document.dispatchEvent(request);
-                    if (!handled) return nativeOpen(url, target, features);
-                    const popupFrameName = request.detail && request.detail.popupFrameName;
-                    if (popupFrameName) {
-                        try {
-                            const popupWindow = window.parent.frames[popupFrameName];
-                            if (popupWindow) return popupWindow;
-                        } catch (error) {}
-                    }
-                    return {
-                        closed: false,
-                        opener: window,
-                        focus() {},
-                        blur() {},
-                        close() { this.closed = true; }
-                    };
-                };
-                window.close = function() {
-                    const request = new CustomEvent(${JSON.stringify(closeEventName)}, {
-                        bubbles: false,
-                        cancelable: true
-                    });
-                    const handled = !document.dispatchEvent(request);
-                    if (!handled) return nativeClose();
-                };
-            })();`;
-            (iframeDoc.head || iframeDoc.documentElement).appendChild(bridgeScript);
-            bridgeScript.remove();
-        }
-
         loadDetailContentById(panelId, href, sourceTab) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
@@ -9047,13 +9422,6 @@
 
                         // 弹窗内链接统一在新弹窗中打开，不新开浏览器标签（支持多级弹窗）
                         const self = this;
-                        this.installDetailWindowOpenBridge(
-                            panelId,
-                            contentIframe,
-                            iframeDoc,
-                            sourceTab,
-                            fullUrl
-                        );
                         if (!iframeDoc.body.hasAttribute('data-jigui-link-intercept')) {
                             iframeDoc.body.setAttribute('data-jigui-link-intercept', '1');
                             iframeDoc.body.addEventListener('click', function(e) {
@@ -9096,7 +9464,17 @@
                                 e.stopPropagation();
                                 e.stopImmediatePropagation();
                                 const titleText = (anchor.textContent || anchor.innerText || '').trim().slice(0, 50) || '详情';
-                                self.openDetailPanel(linkUrl, titleText);
+                                self.openDetailPanel(
+                                    linkUrl,
+                                    titleText,
+                                    sourceTab,
+                                    {
+                                        todoTaskId: panel.dataset.todoSourceTaskId,
+                                        todoTaskType: panel.dataset.todoSourceTaskType,
+                                        todoTaskDocNo: panel.dataset.todoSourceTaskDocNo,
+                                        todoAutomationActionAt: panel.dataset.todoAutomationActionAt
+                                    }
+                                );
                             }, true);
                         }
 
