@@ -1,12 +1,15 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.52
+// @version      3.6.59
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
 // @match        http://10.16.88.34/zzl/
 // @match        http://10.16.88.34/jigui/
+// @match        http://10.16.88.34/notice/*
+// @match        http://10.16.88.34/zzl/*
+// @match        http://10.16.88.34/jigui/*
 // @run-at       document-start
 // @grant        GM_xmlhttpRequest
 // @grant        GM_notification
@@ -14,6 +17,7 @@
 // @grant        GM_setValue
 // @grant        GM_info
 // @grant        unsafeWindow
+// @noframes
 // @connect      64.90.23.77
 // @connect      gh-proxy.org
 // @require      https://cdn.jsdelivr.net/npm/gbk.js@0.3.0/dist/gbk.min.js
@@ -25,6 +29,187 @@
     'use strict';
 
     /* global GBK, GM_info */
+
+    const NATIVE_AUTOMATION_CONTEXT_KEY = 'jzt-todo-native-automation-context-v1';
+    const entryPaths = new Set(['/notice/', '/zzl/', '/jigui/']);
+    const currentPath = String(window.location.pathname || '').toLowerCase();
+    const isMainEntryPage = entryPaths.has(currentPath);
+
+    function runNativeAutomationResultObserver() {
+        if (window.top !== window.self) return;
+        const apiBase = 'https://64.90.23.77/api/v2';
+        const apiToken = '1f452c15a2cfcb2fe5dad95e53313b60a8e405a432ea985587552a1b010acae1';
+        const deviceIdKey = 'jzt-todo-device-id';
+        const deviceSecretKey = 'jzt-todo-device-secret';
+        let completed = false;
+        let checking = false;
+
+        const readContext = () => {
+            try {
+                const raw = GM_getValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
+                return typeof raw === 'string' ? JSON.parse(raw || 'null') : raw;
+            } catch (error) {
+                return null;
+            }
+        };
+        const writeContext = (context) => {
+            try {
+                GM_setValue(NATIVE_AUTOMATION_CONTEXT_KEY, JSON.stringify(context));
+            } catch (error) {}
+        };
+        const getUrlId = (value) => {
+            try {
+                const url = new URL(String(value || ''), window.location.href);
+                for (const [key, parameterValue] of url.searchParams.entries()) {
+                    if (key.toLowerCase() === 'id' && /^\d+$/.test(parameterValue)) {
+                        return parameterValue;
+                    }
+                }
+            } catch (error) {}
+            return '';
+        };
+        const request = (method, path, body) => new Promise((resolve, reject) => {
+            const deviceId = String(GM_getValue(deviceIdKey, '') || '');
+            const deviceSecret = String(GM_getValue(deviceSecretKey, '') || '');
+            if (!deviceId || !deviceSecret) {
+                reject(new Error('设备身份不可用'));
+                return;
+            }
+            GM_xmlhttpRequest({
+                method,
+                url: apiBase + path,
+                headers: {
+                    'Authorization': 'Bearer ' + apiToken,
+                    'Content-Type': 'application/json',
+                    'X-JZT-Device-ID': deviceId,
+                    'X-JZT-Device-Secret': deviceSecret
+                },
+                data: JSON.stringify(body || {}),
+                timeout: 15000,
+                onload: (response) => {
+                    let payload;
+                    try {
+                        payload = JSON.parse(response.responseText || '{}');
+                    } catch (error) {
+                        reject(new Error('服务器返回了无法识别的数据'));
+                        return;
+                    }
+                    if (response.status >= 200 && response.status < 300 && payload.ok !== false) {
+                        resolve(payload);
+                        return;
+                    }
+                    reject(new Error(payload.error || ('请求失败（' + response.status + '）')));
+                },
+                onerror: () => reject(new Error('无法连接待办服务器')),
+                ontimeout: () => reject(new Error('连接待办服务器超时'))
+            });
+        });
+        const record = (context, eventType, detectionMethod, resultDetail) => request(
+            'POST',
+            '/tasks/' + encodeURIComponent(context.taskId) + '/automation-events',
+            {
+                eventType,
+                detectionMethod,
+                clientVersion: (() => {
+                    try {
+                        return String(GM_info.script.version || '');
+                    } catch (error) {
+                        return '';
+                    }
+                })(),
+                pagePath: window.location.pathname,
+                resultDetail: String(resultDetail || '').slice(0, 120)
+            }
+        );
+        const inspect = () => {
+            if (completed || checking || !document.body) return;
+            const context = readContext();
+            const now = Date.now();
+            if (
+                !context
+                || !context.taskId
+                || !context.actionAt
+                || now - Number(context.actionAt) > 2 * 60 * 60 * 1000
+            ) return;
+            const text = String(document.body.innerText || document.body.textContent || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, '')
+                .trim();
+            if (!text || /失败|不成功|未成功|错误|无权限/.test(text)) return;
+            if (!/成功|办理完成|操作完成|提交完成|恭喜/.test(text)) return;
+
+            const expectedId = String(context.detailId || '');
+            const numberMatch = text.match(/自动编号为[：:]?(\d+)/);
+            const resultId = numberMatch ? numberMatch[1] : '';
+            let openerId = '';
+            try {
+                openerId = getUrlId(window.opener && window.opener.location.href);
+            } catch (error) {}
+            const currentId = getUrlId(window.location.href);
+            const idMatched = expectedId
+                ? [resultId, openerId, currentId].includes(expectedId)
+                : Boolean(context.docNo && text.includes(String(context.docNo).replace(/\s+/g, '')));
+            if (!idMatched) return;
+
+            const claimedAt = Number(context.completionClaimedAt || 0);
+            if (claimedAt && now - claimedAt < 2 * 60 * 1000) return;
+            checking = true;
+            context.completionClaimedAt = now;
+            context.resultPage = window.location.pathname;
+            writeContext(context);
+            record(context, 'success_detected', 'native-popup-result', context.taskType)
+                .catch(() => {})
+                .then(() => request(
+                    'POST',
+                    '/tasks/' + encodeURIComponent(context.taskId) + '/complete',
+                    { source: 'auto-success-page' }
+                ))
+                .then(() => {
+                    completed = true;
+                    context.completionSucceededAt = Date.now();
+                    writeContext(context);
+                    return record(
+                        context,
+                        'complete_succeeded',
+                        'native-popup-result',
+                        'auto-success-page'
+                    ).catch(() => {});
+                })
+                .catch((error) => {
+                    checking = false;
+                    context.completionClaimedAt = 0;
+                    context.lastError = String(error && error.message || error).slice(0, 120);
+                    writeContext(context);
+                    record(
+                        context,
+                        'complete_failed',
+                        'native-popup-result',
+                        context.lastError
+                    ).catch(() => {});
+                });
+        };
+
+        const start = () => {
+            inspect();
+            const observer = new MutationObserver(inspect);
+            observer.observe(document.documentElement, {
+                childList: true,
+                subtree: true,
+                characterData: true
+            });
+            window.setInterval(inspect, 1000);
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', start, { once: true });
+        } else {
+            start();
+        }
+    }
+
+    if (!isMainEntryPage) {
+        runNativeAutomationResultObserver();
+        return;
+    }
 
     // 固定浏览器标签页标题
     try {
@@ -627,6 +812,10 @@
     const TODO_UPDATE_GUIDE_PATH = '/api/v2/r/c539f198f482277d3981f2b40cdf2fa6e64506d5708a0f0e7702e8f98610ed2f';
     const TODO_UPDATE_GUIDE_IMAGE_WIDTH = 1198;
     const TODO_UPDATE_GUIDE_IMAGE_HEIGHT = 531;
+    const MAIN_PANEL_Z_INDEX = 99999;
+    const DETAIL_PANEL_Z_INDEX_BASE = 110000;
+    const DETAIL_PANEL_VIEWPORT_MARGIN = 10;
+    const DETAIL_PANEL_DRAG_VISIBLE_WIDTH = 160;
     const TODO_ACTIVE_SYNC_INTERVAL = 60000;
     const TODO_ACTIVITY_IDLE_TIMEOUT = 5 * 60000;
     const TODO_TIMER_SYNC_DEDUPE = 30000;
@@ -636,6 +825,7 @@
     const TODO_USER_DIRECTORY_CACHE_KEY = 'jzt-todo-user-directory-cache';
     const TODO_DESKTOP_NOTIFICATION_KEY = 'jzt-todo-desktop-notification-enabled';
     const TODO_SHOW_CREATE_BUTTONS_KEY = 'jzt-show-create-buttons';
+    const ZZL_APPROVAL_STATUS_ENABLED_KEY = 'jzt-zzl-approval-status-enabled';
     const TODO_DEPARTMENTS = [
         '工厂管理部',
         '人力资源部',
@@ -685,6 +875,7 @@
             this.automationCompletingTaskIds = new Set();
             this.automationCompletedTaskIds = new Set();
             this.automationTimeouts = new Map();
+            this.nativeAutomationResultHandler = null;
             this.initialized = false;
         }
 
@@ -798,12 +989,15 @@
             if (this.initialized) return;
             this.initialized = true;
             this.bindActivityDetection();
+            this.bindNativeAutomationResultSync();
             this.updateIdentityDisplay();
             if (this.profile && this.profile.receiveTasks === false) {
                 this.systemUser = this.readCurrentUser()
                     || this.profile.systemName
                     || this.profile.name;
+                this.ensureDeviceCredentials();
                 this.identityReady = true;
+                this.reportClientSettings();
                 this.disableTodoServices();
                 return;
             }
@@ -865,6 +1059,7 @@
                 this.profile = payload.profile;
                 this.identityReady = true;
                 this.cacheProfile(this.profile);
+                this.reportClientSettings();
                 this.startIdentityServices();
             }).catch((error) => {
                 if (error.status === 401) {
@@ -1490,6 +1685,7 @@
             this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/complete', {
                 source: 'manual-complete-button'
             }).then(() => {
+                this.clearNativeAutomationContext(task.id);
                 this.tasks = this.tasks.filter((item) => item.id !== task.id);
                 this.renderTasks();
                 return this.refreshTasks(false);
@@ -1500,6 +1696,53 @@
                 }
                 window.alert('待办完成失败：' + error.message);
             });
+        }
+
+        createFeatureUsageOperation(featureType, category, reportStarted) {
+            const operation = {
+                operationId: this.generateUuid(),
+                featureType: String(featureType || ''),
+                category: String(category || '').slice(0, 40),
+                startedAt: Date.now()
+            };
+            if (reportStarted) {
+                this.reportFeatureUsage(operation, 'started', {
+                    resultCode: 'started'
+                });
+            }
+            return operation;
+        }
+
+        reportFeatureUsage(operation, outcome, details) {
+            if (!operation || !this.identityReady || !this.profile) {
+                return Promise.resolve(false);
+            }
+            const data = details || {};
+            const body = {
+                operationId: operation.operationId,
+                featureType: operation.featureType,
+                outcome: String(outcome || ''),
+                category: String(
+                    data.category != null ? data.category : operation.category
+                ).slice(0, 40),
+                rowCount: Math.max(0, Number(data.rowCount) || 0),
+                fieldCount: Math.max(0, Number(data.fieldCount) || 0),
+                durationMs: Math.max(0, Date.now() - operation.startedAt),
+                resultCode: String(data.resultCode || '').slice(0, 60),
+                clientVersion: TODO_CLIENT_VERSION,
+                pagePath: String(window.location.pathname || '').slice(0, 200)
+            };
+            return this.request('POST', '/feature-usage', body)
+                .then(() => true)
+                .catch((error) => {
+                    // 监控是旁路功能，失败不能影响原系统读取、写入或复制。
+                    console.warn('[功能使用监控] 上报失败:', error.message);
+                    return false;
+                });
+        }
+
+        finishFeatureUsage(operation, outcome, details) {
+            return this.reportFeatureUsage(operation, outcome, details);
         }
 
         readFileAsBase64(file) {
@@ -1524,6 +1767,114 @@
                 };
                 reader.readAsArrayBuffer(file);
             });
+        }
+
+        getAutomationDetailId(url) {
+            try {
+                const parsed = new URL(String(url || ''), window.location.href);
+                for (const [key, value] of parsed.searchParams.entries()) {
+                    if (key.toLowerCase() === 'id' && /^\d+$/.test(value)) return value;
+                }
+            } catch (error) {}
+            return '';
+        }
+
+        getClientSettings(overrides) {
+            const values = overrides || {};
+            return {
+                receiveTasks: values.receiveTasks != null
+                    ? Boolean(values.receiveTasks)
+                    : !(this.profile && this.profile.receiveTasks === false),
+                desktopNotifications: values.desktopNotifications != null
+                    ? Boolean(values.desktopNotifications)
+                    : GM_getValue(TODO_DESKTOP_NOTIFICATION_KEY, true) !== false,
+                showCreateButtons: values.showCreateButtons != null
+                    ? Boolean(values.showCreateButtons)
+                    : this.isCreateAndCopyFeatureEnabled(),
+                zzlApprovalStatus: values.zzlApprovalStatus != null
+                    ? Boolean(values.zzlApprovalStatus)
+                    : GM_getValue(
+                        ZZL_APPROVAL_STATUS_ENABLED_KEY,
+                        false
+                    ) === true,
+                clientVersion: TODO_CLIENT_VERSION
+            };
+        }
+
+        reportClientSettings(overrides) {
+            if (!this.identityReady || !this.profile) {
+                return Promise.resolve(false);
+            }
+            return this.request(
+                'POST',
+                '/identity/client-settings',
+                this.getClientSettings(overrides)
+            ).then((payload) => {
+                if (payload && payload.profile) {
+                    this.profile = payload.profile;
+                    this.cacheProfile(this.profile);
+                }
+                return true;
+            }).catch((error) => {
+                // 设置状态上报失败不影响搜索、待办及制造令功能。
+                console.warn('[设置状态] 上报失败:', error.message);
+                return false;
+            });
+        }
+
+        readNativeAutomationContext() {
+            try {
+                const raw = GM_getValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
+                return typeof raw === 'string' ? JSON.parse(raw || 'null') : raw;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        writeNativeAutomationContext(task, pageUrl, actionAt) {
+            if (!task || !task.id) return;
+            const detailUrl = String(task.url || pageUrl || '');
+            const context = {
+                taskId: task.id,
+                taskType: task.taskType,
+                docNo: task.docNo,
+                detailUrl,
+                detailId: this.getAutomationDetailId(detailUrl),
+                openedAt: Date.now(),
+                actionAt: Number(actionAt) || 0,
+                clientVersion: TODO_CLIENT_VERSION
+            };
+            try {
+                GM_setValue(NATIVE_AUTOMATION_CONTEXT_KEY, JSON.stringify(context));
+            } catch (error) {
+                console.warn('[待办自动回传] 无法保存原生窗口任务上下文:', error);
+            }
+        }
+
+        clearNativeAutomationContext(taskId) {
+            const context = this.readNativeAutomationContext();
+            if (!context || (taskId && context.taskId !== taskId)) return;
+            try {
+                GM_setValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
+            } catch (error) {}
+        }
+
+        bindNativeAutomationResultSync() {
+            if (this.nativeAutomationResultHandler) return;
+            this.nativeAutomationResultHandler = () => {
+                if (document.visibilityState === 'hidden') return;
+                const context = this.readNativeAutomationContext();
+                if (!context || !context.completionSucceededAt) return;
+                const taskId = String(context.taskId || '');
+                if (!taskId) return;
+                this.tasks = this.tasks.filter((task) => task.id !== taskId);
+                this.renderTasks();
+                this.refreshTasks(false, 'action').finally(() => {
+                    this.clearNativeAutomationContext(taskId);
+                });
+            };
+            window.addEventListener('focus', this.nativeAutomationResultHandler);
+            document.addEventListener('visibilitychange', this.nativeAutomationResultHandler);
         }
 
         getPanelAutomationTask(panel) {
@@ -1635,6 +1986,7 @@
             panel.dataset.todoAutomationActionAt = String(now);
             panel.dataset.todoAutomationActionType = task.taskType;
             panel.dataset.todoAutomationSuccess = '';
+            this.writeNativeAutomationContext(task, pageUrl, now);
             this.scheduleAutomationTimeout(panel, task, pageUrl);
             if (now - previous < 3000) return;
             this.recordAutomationEvent(
@@ -1717,6 +2069,7 @@
             }).then(() => {
                 this.automationCompletingTaskIds.delete(task.id);
                 this.automationCompletedTaskIds.add(task.id);
+                this.clearNativeAutomationContext(task.id);
                 this.tasks = this.tasks.filter((item) => item.id !== task.id);
                 this.renderTasks();
                 this.showAutomationState(panel, '待办已自动完成并回传', false);
@@ -1837,6 +2190,7 @@
 
         openTask(task) {
             if (!task || !task.url) return;
+            this.writeNativeAutomationContext(task, task.url, 0);
             this.markRead(task);
             this.searchPanel.openDetailPanel(
                 task.url,
@@ -2155,6 +2509,15 @@
                             勾选后显示左侧创建按钮，并开启通知单和机规的复制开单功能；取消勾选后隐藏并关闭上述功能，不影响搜索和待办功能。
                         </span>
                     </label>
+                    <label style="display:block;margin-bottom:13px;padding:10px 12px;border:1px solid #cbd5e1;border-radius:4px;color:#334155;cursor:pointer;">
+                        <span style="display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;">
+                            <input type="checkbox" data-field="zzl-approval-status" style="width:17px;height:17px;margin:0;cursor:pointer;">
+                            读取制造令部套审批状态
+                        </span>
+                        <span style="display:block;margin-top:6px;color:#64748b;font-size:12px;line-height:1.5;">
+                            默认关闭。开启后会并发读取当前页制造令详情，并在人名下方显示待校核或待批准；会增加服务器压力和页面等待时间。
+                        </span>
+                    </label>
                     <div data-field="status" style="min-height:20px;margin-bottom:10px;color:#64748b;font-size:13px;"></div>
                     <div style="display:flex;justify-content:flex-end;gap:10px;">
                         ${isFirstSetup ? '' : '<button type="button" data-action="cancel" style="padding:8px 18px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;font-family:Microsoft YaHei,微软雅黑,sans-serif;font-size:14px;">取消</button>'}
@@ -2171,6 +2534,7 @@
             const desktopNotificationInput = dialog.querySelector('[data-field="desktop-notification"]');
             const desktopNotificationLabel = dialog.querySelector('[data-field="desktop-notification-label"]');
             const showCreateButtonsInput = dialog.querySelector('[data-field="show-create-buttons"]');
+            const zzlApprovalStatusInput = dialog.querySelector('[data-field="zzl-approval-status"]');
             const statusElement = dialog.querySelector('[data-field="status"]');
             const saveButton = dialog.querySelector('[data-action="save"]');
             nameInput.value = this.profile ? this.profile.name : (this.systemUser || '');
@@ -2186,6 +2550,10 @@
                 && typeof this.profile.showCreateButtons === 'boolean'
                 ? this.profile.showCreateButtons
                 : GM_getValue(TODO_SHOW_CREATE_BUTTONS_KEY, true) !== false;
+            zzlApprovalStatusInput.checked = GM_getValue(
+                ZZL_APPROVAL_STATUS_ENABLED_KEY,
+                false
+            ) === true;
 
             const syncDesktopNotificationState = () => {
                 const canReceiveTasks = receiveTasksInput.checked;
@@ -2215,6 +2583,7 @@
                 const receiveTasks = receiveTasksInput.checked;
                 const desktopNotificationEnabled = desktopNotificationInput.checked;
                 const showCreateButtons = showCreateButtonsInput.checked;
+                const zzlApprovalStatusEnabled = zzlApprovalStatusInput.checked;
                 if (name.length < 2) {
                     statusElement.textContent = '请输入至少2个字符的姓名。';
                     statusElement.style.color = '#dc2626';
@@ -2236,23 +2605,47 @@
                         name,
                         department,
                         receiveTasks,
+                        desktopNotifications: desktopNotificationEnabled,
                         showCreateButtons,
+                        zzlApprovalStatus: zzlApprovalStatusEnabled,
                         systemName: this.systemUser || name,
                         clientVersion: TODO_CLIENT_VERSION,
                         deviceName: 'Tampermonkey浏览器'
                     }
-                    : { name, department, receiveTasks, showCreateButtons };
+                    : {
+                        name,
+                        department,
+                        receiveTasks,
+                        desktopNotifications: desktopNotificationEnabled,
+                        showCreateButtons,
+                        zzlApprovalStatus: zzlApprovalStatusEnabled
+                    };
                 this.ensureDeviceCredentials();
                 this.request('POST', path, body).then((payload) => {
                     GM_setValue(
                         TODO_DESKTOP_NOTIFICATION_KEY,
                         desktopNotificationEnabled
                     );
+                    const previousZzlApprovalStatusEnabled = GM_getValue(
+                        ZZL_APPROVAL_STATUS_ENABLED_KEY,
+                        false
+                    ) === true;
+                    GM_setValue(
+                        ZZL_APPROVAL_STATUS_ENABLED_KEY,
+                        zzlApprovalStatusEnabled
+                    );
                     this.profile = payload.profile;
                     this.identityReady = true;
                     this.cacheProfile(this.profile);
                     overlay.remove();
                     this.startIdentityServices();
+                    if (
+                        previousZzlApprovalStatusEnabled !== zzlApprovalStatusEnabled &&
+                        this.searchPanel &&
+                        typeof this.searchPanel.handleZzlApprovalSettingChanged === 'function'
+                    ) {
+                        this.searchPanel.handleZzlApprovalSettingChanged();
+                    }
                 }).catch((error) => {
                     statusElement.textContent = error.message;
                     statusElement.style.color = '#dc2626';
@@ -2387,6 +2780,11 @@
             this.noticeCopySession = {
                 template,
                 copyModule: 'tongzhi',
+                usageOperation: this.createFeatureUsageOperation(
+                    'copy_notice',
+                    '',
+                    true
+                ),
                 options: {
                     copyPart: true,
                     copyOptions: true,
@@ -2403,6 +2801,13 @@
             );
             if (panelId && this.noticeCopySession) {
                 this.noticeCopySession.targetPanelId = panelId;
+            } else if (this.noticeCopySession) {
+                this.finishFeatureUsage(
+                    this.noticeCopySession.usageOperation,
+                    'failed',
+                    { resultCode: 'target-panel-open-failed' }
+                );
+                this.noticeCopySession = null;
             }
         }
 
@@ -2411,6 +2816,11 @@
             this.noticeCopySession = {
                 template,
                 copyModule: 'jigui',
+                usageOperation: this.createFeatureUsageOperation(
+                    'copy_jigui',
+                    '',
+                    true
+                ),
                 targetPanelId: '',
                 runToken: 0,
                 completed: false
@@ -2422,6 +2832,13 @@
             );
             if (panelId && this.noticeCopySession) {
                 this.noticeCopySession.targetPanelId = panelId;
+            } else if (this.noticeCopySession) {
+                this.finishFeatureUsage(
+                    this.noticeCopySession.usageOperation,
+                    'failed',
+                    { resultCode: 'target-panel-open-failed' }
+                );
+                this.noticeCopySession = null;
             }
         }
 
@@ -3986,6 +4403,9 @@
                 runToken
             ).catch((error) => {
                 if (!this.isCopyRunCurrent(session, runToken)) return;
+                this.finishFeatureUsage(session.usageOperation, 'failed', {
+                    resultCode: 'copy-interrupted'
+                });
                 this.showNoticeCopyStatus(
                     panel,
                     '复制中断：' + error.message,
@@ -5610,6 +6030,13 @@
                 '填写完成，请仔细核对后提交!',
                 'success'
             );
+            this.finishFeatureUsage(session.usageOperation, 'success', {
+                resultCode: 'success',
+                rowCount: Array.isArray(template.relationRows)
+                    ? template.relationRows.length
+                    : 0,
+                fieldCount: schema.length
+            });
             this.noticeCopySession = null;
         }
 
@@ -5708,6 +6135,17 @@
                 '填写完成，请仔细核对后提交!',
                 'success'
             );
+            this.finishFeatureUsage(session.usageOperation, 'success', {
+                resultCode: 'success',
+                rowCount:
+                    (Array.isArray(template.materialRows)
+                        ? template.materialRows.length
+                        : 0) +
+                    (Array.isArray(template.cancelMaterialRows)
+                        ? template.cancelMaterialRows.length
+                        : 0),
+                fieldCount: schema.length
+            });
             this.noticeCopySession = null;
         }
 
@@ -6249,7 +6687,13 @@
             // 制造令分项复制只在当前页面内暂存，不上传服务器。
             this.zzlTransferBuffer = null;
             this.zzlActiveCreatePanelId = '';
-            this.maxZIndex = 10001; // 当前最大z-index
+            // 制造令清单审批状态为异步读取；令牌用于丢弃切页、切标签后的旧结果。
+            this.zzlApprovalRenderToken = 0;
+            // 详情窗口必须从创建第一刻起就高于主面板，
+            // 不再依赖延迟的中心点遮挡检测。
+            this.maxZIndex = DETAIL_PANEL_Z_INDEX_BASE;
+            this.detailViewportResizeHandler = null;
+            this.detailViewportResizeFrame = null;
             this.currentTab = 'zhiling'; // 默认制造令作为首页
             this.currentSearchContent = ''; // 当前搜索内容
             this.currentSearchType = 'default'; // 当前搜索类型
@@ -6460,7 +6904,7 @@
                 border: 1px solid #2563eb !important;
                 border-radius: 50% !important;
                 box-shadow: 0 12px 28px rgba(37, 99, 235, 0.28) !important;
-                z-index: 99999 !important;
+                z-index: ${MAIN_PANEL_Z_INDEX} !important;
                 display: flex !important;
                 flex-direction: column !important;
                 font-family: "Microsoft YaHei", "微软雅黑", sans-serif !important;
@@ -6735,6 +7179,7 @@
 
             this.attachEventListeners();
             this.makeDraggable();
+            this.installDetailViewportGuard();
             this.initScriptUpdateCheck();
             if (!this.isNoticeRootMode) {
                 this.initTabs();
@@ -7136,17 +7581,39 @@
             const resultContainer = this._els.searchResultArea;
             if (resultContainer) {
                 resultContainer.addEventListener('click', (e) => {
-                    const link = e.target.closest('.jigui-detail-link');
+                    const eventTarget = e.target && e.target.nodeType === 1
+                        ? e.target
+                        : e.target && e.target.parentElement;
+                    const link = eventTarget && eventTarget.closest
+                        ? eventTarget.closest('.jigui-detail-link')
+                        : null;
                     if (link) {
                         e.preventDefault();
                         e.stopPropagation();
                         const href = link.getAttribute('data-href') || link.href;
                         const sourceTab = link.getAttribute('data-source-tab') || null;
                         const linkText = link.textContent || link.innerText || '';
-                        if (href) this.openDetailPanel(href, linkText, sourceTab);
+                        if (href) {
+                            try {
+                                const panelId = this.openDetailPanel(
+                                    href,
+                                    linkText,
+                                    sourceTab
+                                );
+                                if (!panelId) {
+                                    throw new Error('未能创建详情窗口');
+                                }
+                            } catch (error) {
+                                this.showDetailOpenFailure(error);
+                            }
+                        } else {
+                            this.showDetailOpenFailure(new Error('详情链接无效'));
+                        }
                         return;
                     }
-                    const pageLink = e.target.closest('.jigui-page-link');
+                    const pageLink = eventTarget && eventTarget.closest
+                        ? eventTarget.closest('.jigui-page-link')
+                        : null;
                     if (pageLink) {
                         e.preventDefault();
                         const page = parseInt(pageLink.getAttribute('data-page'), 10);
@@ -7155,7 +7622,9 @@
                         }
                         return;
                     }
-                    const gotoBtn = e.target.closest('.jigui-goto-btn');
+                    const gotoBtn = eventTarget && eventTarget.closest
+                        ? eventTarget.closest('.jigui-goto-btn')
+                        : null;
                     if (gotoBtn) {
                         e.preventDefault();
                         const paginationDiv = resultContainer.querySelector('.jigui-pagination');
@@ -7940,6 +8409,209 @@
             return String(cell);
         }
 
+        isZzlApprovalStatusEnabled() {
+            return GM_getValue(ZZL_APPROVAL_STATUS_ENABLED_KEY, false) === true;
+        }
+
+        handleZzlApprovalSettingChanged() {
+            // 立即作废设置变更前仍在进行的详情读取结果。
+            this.zzlApprovalRenderToken += 1;
+            if (this.currentTab !== 'zhiling') return;
+            const state = this.tabLastViewState.get('zhiling');
+            if (!state || !state.parseResult) {
+                this.loadTabDefaultContent('zhiling', { forceRefresh: true });
+                return;
+            }
+            this.displayResults(
+                this.cloneParseResult(state.parseResult),
+                state.searchType || 'default',
+                state.searchContent || ''
+            );
+        }
+
+        getZzlApprovalColumns(headers) {
+            const excluded = new Set([
+                '编号', '用户', '工号', '描述', '创建', '状态',
+                '序号', '日期', '创建人', '创建日期'
+            ]);
+            return (headers || []).map((header, columnIndex) => ({
+                columnIndex,
+                category: this.normalizeZzlTransferText(header)
+            })).filter((item) => item.category && !excluded.has(item.category));
+        }
+
+        isZzlCreatedModuleCell(value) {
+            const text = this.normalizeZzlTransferText(value);
+            return Boolean(text) && !/^(?:未创建|创建|未完成|完成|无|[-—/]+)$/.test(text);
+        }
+
+        findZzlApprovalRow(doc, tableMatch) {
+            if (!doc || !tableMatch) return null;
+            const allElements = Array.from(doc.querySelectorAll('*'));
+            const elementOrder = new Map();
+            allElements.forEach((element, index) => elementOrder.set(element, index));
+            const startElement = tableMatch.info && tableMatch.info.table
+                ? tableMatch.info.table
+                : (tableMatch.startRow || tableMatch.table);
+            const startPosition = elementOrder.get(startElement);
+            if (!Number.isFinite(startPosition)) return null;
+            return Array.from(doc.querySelectorAll('tr')).find((row) => {
+                if (row.querySelector('table')) return false;
+                const rowPosition = elementOrder.get(row);
+                if (!Number.isFinite(rowPosition) || rowPosition <= startPosition) return false;
+                const text = this.normalizeZzlTransferText(
+                    row.innerText || row.textContent || ''
+                );
+                return text.includes('编制') &&
+                    text.includes('校核') &&
+                    text.includes('批准');
+            }) || null;
+        }
+
+        extractZzlApprovalValues(row) {
+            const result = { prepared: '', checked: '', approved: '' };
+            if (!row) return result;
+            const text = this.normalizeZzlTransferText(
+                row.innerText || row.textContent || ''
+            );
+            const match = text.match(/编制[：:]?(.*?)校核[：:]?(.*?)批准[：:]?(.*)$/);
+            if (match) {
+                result.prepared = match[1] || '';
+                result.checked = match[2] || '';
+                result.approved = match[3] || '';
+            }
+            return result;
+        }
+
+        isZzlApprovalValueCompleted(value, stage) {
+            const text = this.normalizeZzlTransferText(value)
+                .replace(/^[：:]+/, '')
+                .trim();
+            if (!text || /^[-—/]+$/.test(text)) return false;
+            if (stage === 'checked' && /未校核|待校核/.test(text)) return false;
+            if (stage === 'approved' && /未批准|待批准|未审批|待审批/.test(text)) return false;
+            return !/^(?:无|未填写|待填写)$/.test(text);
+        }
+
+        getZzlPendingApprovalStage(doc, category) {
+            const normalizedCategory = this.normalizeZzlTransferText(category);
+            const tableMatch = this.findZzlSourceTable(doc, {
+                category: normalizedCategory,
+                isMain: normalizedCategory === '主机'
+            });
+            if (!tableMatch) return '';
+            const approvalRow = this.findZzlApprovalRow(doc, tableMatch);
+            if (!approvalRow) return '';
+            const values = this.extractZzlApprovalValues(approvalRow);
+            // 流程按先校核、后批准判断。校核未完成时不再同时显示“待批准”。
+            if (!this.isZzlApprovalValueCompleted(values.checked, 'checked')) {
+                return '待校核';
+            }
+            if (!this.isZzlApprovalValueCompleted(values.approved, 'approved')) {
+                return '待批准';
+            }
+            return '';
+        }
+
+        fetchZzlApprovalStages(orderId, categories) {
+            const url = 'http://10.16.88.34/zzl/viewtotal.asp?id=' +
+                encodeURIComponent(orderId);
+            return this.fetchUrl(url, 'http://10.16.88.34/zzl/', {
+                noCache: true
+            }).then((html) => {
+                const doc = new DOMParser().parseFromString(html, 'text/html');
+                const stages = new Map();
+                categories.forEach((category) => {
+                    stages.set(
+                        this.normalizeZzlTransferText(category),
+                        this.getZzlPendingApprovalStage(doc, category)
+                    );
+                });
+                return stages;
+            });
+        }
+
+        applyZzlApprovalStage(resultDiv, rowIndex, columnIndex, stage) {
+            if (!stage || !resultDiv) return;
+            const cell = resultDiv.querySelector(
+                'td[data-result-row-index="' + rowIndex + '"]' +
+                '[data-result-column-index="' + columnIndex + '"]'
+            );
+            if (!cell || cell.querySelector('.zzl-approval-stage')) return;
+            const suffix = cell.ownerDocument.createElement('span');
+            suffix.className = 'zzl-approval-stage';
+            suffix.textContent = '（' + stage + '）';
+            suffix.style.cssText = [
+                'display:block',
+                'margin-top:2px',
+                'color:#f00',
+                'font-size:12px',
+                'font-weight:normal',
+                'line-height:1.2',
+                'text-align:center',
+                'text-decoration:none'
+            ].join(';');
+            cell.appendChild(suffix);
+        }
+
+        enrichZzlApprovalStatuses(parseResult, resultDiv, approvalToken) {
+            const headers = parseResult && parseResult.headers || [];
+            const rows = parseResult && parseResult.rows || [];
+            const columns = this.getZzlApprovalColumns(headers);
+            const numberColumnIndex = headers.findIndex((header) => {
+                const text = this.normalizeZzlTransferText(header);
+                return text === '编号' || text.includes('编号');
+            });
+            if (numberColumnIndex < 0 || !columns.length || !rows.length) {
+                return Promise.resolve([]);
+            }
+
+            const requests = [];
+            rows.forEach((row, rowIndex) => {
+                const orderIdMatch = this.normalizeZzlTransferText(
+                    this.cellText(row[numberColumnIndex])
+                ).match(/\d+/);
+                if (!orderIdMatch) return;
+                const createdColumns = columns.filter((item) =>
+                    item.columnIndex < row.length &&
+                    this.isZzlCreatedModuleCell(
+                        this.cellText(row[item.columnIndex])
+                    )
+                );
+                if (!createdColumns.length) return;
+                const categories = createdColumns.map((item) => item.category);
+                const request = this.fetchZzlApprovalStages(
+                    orderIdMatch[0],
+                    categories
+                ).then((stages) => {
+                    if (approvalToken !== this.zzlApprovalRenderToken ||
+                        this.currentTab !== 'zhiling') return;
+                    createdColumns.forEach((item) => {
+                        const stage = stages.get(item.category) || '';
+                        this.applyZzlApprovalStage(
+                            resultDiv,
+                            rowIndex,
+                            item.columnIndex,
+                            stage
+                        );
+                    });
+                }).catch((error) => {
+                    console.warn(
+                        '[制造令审批状态] 读取失败，编号=' + orderIdMatch[0] + ':',
+                        error && error.message ? error.message : error
+                    );
+                });
+                requests.push(request);
+            });
+            // map/forEach 已经同时发出当前页请求。由调用方等待整批结束后再显示清单。
+            return Promise.all(requests).then(() => {
+                if (approvalToken === this.zzlApprovalRenderToken) {
+                    console.log('[制造令审批状态] 当前页读取完成，共 ' + requests.length + ' 个详情页');
+                }
+                return requests;
+            });
+        }
+
         getModuleBaseUrl(tab) {
             const tabUrls = {
                 'zhiling': 'http://10.16.88.34/zzl/',
@@ -7987,13 +8659,13 @@
             const sourceTab = parseResult.sourceTab || this.currentTab;
             // 异步搜索返回时如果用户已切换模块，不用旧模块结果覆盖当前界面。
             if (parseResult.sourceTab && sourceTab !== this.currentTab) return;
+            const approvalToken = ++this.zzlApprovalRenderToken;
             let results = parseResult.rows;
             const headers = parseResult.headers;
             let totalPages = parseResult.totalPages || 1;
             let totalCount = parseResult.totalCount || results.length;
             const currentPage = parseResult.currentPage || 1;
-            this.currentDisplayedPage = currentPage;
-
+ 
 
             if (results.length === 0) {
                 const msg = searchType === 'default'
@@ -8019,7 +8691,7 @@
             const showPagination = results.length > 0 && totalPages >= 1;
 
             // 使用flex布局，确保分页控件在底部
-            let html = '<div style="display: flex; flex-direction: column; height: 100%; min-height: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
+            let html = '<div class="jzt-search-result-content" style="display: flex; flex-direction: column; height: 100%; min-height: 0; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
 
             // 表格容器，占据剩余空间，确保可以滚动显示所有内容
             html += '<div style="flex: 1; overflow-x: auto; overflow-y: auto; min-height: 0; position: relative; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;"><table style="border-collapse: collapse; font-size: 14px; white-space: nowrap; width: auto; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
@@ -8066,7 +8738,10 @@
                 for (let i = 0; i < row.length; i++) {
                     const cell = row[i];
                     const alignStyle = (partNameColumnIndex >= 0 && i === partNameColumnIndex) ? 'text-align: left;' : 'text-align: center;';
-                    const tdOpen = '<td style="padding: 6px 8px; ' + alignStyle + ' border: 1px solid #999; white-space: nowrap; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
+                    const resultCellData = sourceTab === 'zhiling'
+                        ? ' data-result-row-index="' + rowIndex + '" data-result-column-index="' + i + '"'
+                        : '';
+                    const tdOpen = '<td' + resultCellData + ' style="padding: 6px 8px; ' + alignStyle + ' border: 1px solid #999; white-space: nowrap; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">';
                     if (typeof cell === 'object' && cell.type === 'link') {
                         let href = cell.href;
                         if (sourceTab === 'zhiling') {
@@ -8154,27 +8829,48 @@
             resultDiv.style.writingMode = 'horizontal-tb';
             resultDiv.style.direction = 'ltr';
 
-            resultDiv.innerHTML = html;
-            this.currentSearchContent = searchContent;
-            this.currentSearchType = searchType;
+            const commitResult = (finalHtml) => {
+                if (approvalToken !== this.zzlApprovalRenderToken ||
+                    sourceTab !== this.currentTab ||
+                    !document.body.contains(resultDiv)) return;
+                resultDiv.innerHTML = finalHtml;
+                this.currentDisplayedPage = currentPage;
+                this.currentSearchContent = searchContent;
+                this.currentSearchType = searchType;
 
-            // 每次渲染后缓存当前标签的最后结果，供切换标签时直接秒开
-            if (sourceTab) {
-                this.tabLastViewState.set(sourceTab, {
-                    searchContent: searchContent || '',
-                    searchType: searchType || 'default',
-                    pageNum: currentPage,
-                    parseResult: this.cloneParseResult({
-                        headers: headers,
-                        rows: results,
-                        totalPages: totalPages,
-                        totalCount: totalCount,
-                        pageSize: pageSize,
-                        currentPage: currentPage,
-                        sourceTab: sourceTab
-                    })
+                // 完整结果真正展示后再缓存，避免切页等待期间把新页误当作当前页。
+                if (sourceTab) {
+                    this.tabLastViewState.set(sourceTab, {
+                        searchContent: searchContent || '',
+                        searchType: searchType || 'default',
+                        pageNum: currentPage,
+                        parseResult: this.cloneParseResult({
+                            headers: headers,
+                            rows: results,
+                            totalPages: totalPages,
+                            totalCount: totalCount,
+                            pageSize: pageSize,
+                            currentPage: currentPage,
+                            sourceTab: sourceTab
+                        })
+                    });
+                }
+            };
+
+            if (sourceTab === 'zhiling' && this.isZzlApprovalStatusEnabled()) {
+                // 新页先在脱离页面的容器中补齐状态。旧页保持原样，整批完成后一次替换。
+                const staging = resultDiv.ownerDocument.createElement('div');
+                staging.innerHTML = html;
+                this.enrichZzlApprovalStatuses(
+                    parseResult,
+                    staging,
+                    approvalToken
+                ).then(() => {
+                    commitResult(staging.innerHTML);
                 });
+                return;
             }
+            commitResult(html);
         }
 
         // 跳转到指定页（非工号搜索时使用，只显示该页数据）
@@ -8302,6 +8998,198 @@
                 });
         }
 
+        getDetailViewportSize() {
+            const documentElement = document.documentElement;
+            const width = Math.max(
+                1,
+                Number(window.innerWidth) ||
+                    (documentElement && documentElement.clientWidth) ||
+                    1
+            );
+            const height = Math.max(
+                1,
+                Number(window.innerHeight) ||
+                    (documentElement && documentElement.clientHeight) ||
+                    1
+            );
+            return { width, height };
+        }
+
+        normalizeDetailPanelGeometry(geometry, options = {}) {
+            const viewport = this.getDetailViewportSize();
+            const margin = DETAIL_PANEL_VIEWPORT_MARGIN;
+            const maxWidth = Math.max(1, viewport.width - margin * 2);
+            const maxHeight = Math.max(1, viewport.height - margin * 2);
+            const requestedMinWidth = Number(options.minWidth) || 300;
+            const requestedMinHeight = Number(options.minHeight) || 200;
+            const minWidth = Math.min(requestedMinWidth, maxWidth);
+            const minHeight = Math.min(requestedMinHeight, maxHeight);
+            const finiteNumber = (value, fallback) => {
+                const number = Number(value);
+                return Number.isFinite(number) ? number : fallback;
+            };
+
+            const width = Math.min(
+                maxWidth,
+                Math.max(minWidth, finiteNumber(geometry.width, 800))
+            );
+            const height = Math.min(
+                maxHeight,
+                Math.max(minHeight, finiteNumber(geometry.height, 600))
+            );
+            let top = finiteNumber(geometry.top, margin);
+            let left = finiteNumber(geometry.left, margin);
+
+            top = Math.max(
+                margin,
+                Math.min(Math.max(margin, viewport.height - height - margin), top)
+            );
+
+            if (options.allowHorizontalOverflow) {
+                const visibleWidth = Math.min(
+                    DETAIL_PANEL_DRAG_VISIBLE_WIDTH,
+                    width,
+                    viewport.width
+                );
+                left = Math.max(
+                    visibleWidth - width,
+                    Math.min(viewport.width - visibleWidth, left)
+                );
+            } else {
+                left = Math.max(
+                    margin,
+                    Math.min(Math.max(margin, viewport.width - width - margin), left)
+                );
+            }
+
+            return { top, left, width, height };
+        }
+
+        constrainDetailPanelToViewport(panelId, allowHorizontalOverflow = false) {
+            const panel = this.detailPanels.get(panelId);
+            if (!panel || panel.classList.contains('maximized')) return;
+
+            const state = this.detailPanelStates.get(panelId);
+            const rect = panel.getBoundingClientRect();
+            const computedStyle = window.getComputedStyle(panel);
+            const isMinimized = !!(state && state.isMinimized);
+            const currentWidth = parseFloat(computedStyle.width) || rect.width || 800;
+            const currentHeight = parseFloat(computedStyle.height) || rect.height || 600;
+            const geometry = this.normalizeDetailPanelGeometry(
+                {
+                    top: rect.top,
+                    left: rect.left,
+                    width: currentWidth,
+                    height: currentHeight
+                },
+                {
+                    allowHorizontalOverflow,
+                    minWidth: isMinimized ? Math.min(300, currentWidth) : 300,
+                    minHeight: isMinimized ? Math.min(32, currentHeight) : 200
+                }
+            );
+
+            panel.style.setProperty('top', geometry.top + 'px', 'important');
+            panel.style.setProperty('left', geometry.left + 'px', 'important');
+            panel.style.setProperty('width', geometry.width + 'px', 'important');
+            panel.style.setProperty('height', geometry.height + 'px', 'important');
+
+            if (state && state.normalState && !isMinimized) {
+                state.normalState.top = geometry.top + 'px';
+                state.normalState.left = geometry.left + 'px';
+                state.normalState.width = geometry.width + 'px';
+                state.normalState.height = geometry.height + 'px';
+                state.normalState.fullWindowRight = geometry.left + geometry.width;
+                state.normalState.fullWindowTop = geometry.top;
+            }
+        }
+
+        ensureDetailPanelAccessible(panelId) {
+            const panel = this.detailPanels.get(panelId);
+            if (!panel) return;
+
+            const currentZIndex = parseInt(window.getComputedStyle(panel).zIndex, 10) || 0;
+            if (currentZIndex <= MAIN_PANEL_Z_INDEX) {
+                this.bringToFront(panelId);
+            }
+            this.constrainDetailPanelToViewport(panelId, false);
+
+            requestAnimationFrame(() => {
+                if (!this.detailPanels.has(panelId) || !document.body.contains(panel)) return;
+                const closeButton = panel.querySelector('.detail-close-btn');
+                const targetRect = closeButton
+                    ? closeButton.getBoundingClientRect()
+                    : panel.getBoundingClientRect();
+                const viewport = this.getDetailViewportSize();
+                const x = Math.max(0, Math.min(viewport.width - 1, targetRect.left + targetRect.width / 2));
+                const y = Math.max(0, Math.min(viewport.height - 1, targetRect.top + targetRect.height / 2));
+                const topElement = document.elementFromPoint(x, y);
+                if (!topElement || !panel.contains(topElement)) {
+                    this.bringToFront(panelId);
+                    this.constrainDetailPanelToViewport(panelId, false);
+                }
+            });
+        }
+
+        installDetailViewportGuard() {
+            if (this.detailViewportResizeHandler) return;
+            this.detailViewportResizeHandler = () => {
+                if (this.detailViewportResizeFrame) {
+                    cancelAnimationFrame(this.detailViewportResizeFrame);
+                }
+                this.detailViewportResizeFrame = requestAnimationFrame(() => {
+                    this.detailViewportResizeFrame = null;
+                    this.detailPanels.forEach((panel, panelId) => {
+                        this.constrainDetailPanelToViewport(panelId, false);
+                        const currentZIndex = parseInt(
+                            window.getComputedStyle(panel).zIndex,
+                            10
+                        ) || 0;
+                        if (currentZIndex <= MAIN_PANEL_Z_INDEX) {
+                            this.bringToFront(panelId);
+                        }
+                    });
+                });
+            };
+            window.addEventListener('resize', this.detailViewportResizeHandler);
+            if (window.visualViewport) {
+                window.visualViewport.addEventListener(
+                    'resize',
+                    this.detailViewportResizeHandler
+                );
+            }
+        }
+
+        showDetailOpenFailure(error) {
+            console.error('打开详情窗口失败:', error);
+            let notice = document.getElementById('jzt-detail-open-failure');
+            if (!notice) {
+                notice = document.createElement('div');
+                notice.id = 'jzt-detail-open-failure';
+                notice.style.cssText = [
+                    'position:fixed',
+                    'left:50%',
+                    'top:24px',
+                    'transform:translateX(-50%)',
+                    'z-index:310000',
+                    'padding:10px 16px',
+                    'border:1px solid #dc2626',
+                    'border-radius:4px',
+                    'background:#fff1f2',
+                    'color:#b91c1c',
+                    'font-size:15px',
+                    'font-family:"Microsoft YaHei","\u5fae\u8f6f\u96c5\u9ed1",sans-serif',
+                    'box-shadow:0 8px 24px rgba(15,23,42,.18)'
+                ].join(';');
+                document.body.appendChild(notice);
+            }
+            notice.textContent = '详情窗口打开失败，请刷新页面后重试。';
+            clearTimeout(this.detailOpenFailureTimer);
+            this.detailOpenFailureTimer = setTimeout(() => {
+                if (notice && notice.parentNode) notice.remove();
+            }, 5000);
+        }
+
         openDetailPanel(href, titleText, sourceTab, options = {}) {
             if (!href) {
                 return;
@@ -8317,8 +9205,9 @@
                 this.getModuleBaseUrl(sourceTab)
             );
             const effectiveSavedState = isUpdateGuidePanel ? null : savedState;
-            const windowWidth = window.innerWidth || 1920;
-            const windowHeight = window.innerHeight || 1080;
+            const viewport = this.getDetailViewportSize();
+            const windowWidth = viewport.width;
+            const windowHeight = viewport.height;
             let defaultWidth = 800;
             let defaultHeight = 600;
 
@@ -8356,19 +9245,24 @@
                 left += (this.detailPanels.size * offset) % 200;
             }
 
-            // 确保位置：顶部严格限制在窗口内，左右可拖出但至少30px在窗口内
-            const dragBackMargin = 30;
-            const panelWidth = effectiveSavedState ? effectiveSavedState.width : defaultWidth;
-            const panelHeight = effectiveSavedState ? effectiveSavedState.height : defaultHeight;
-
-            // 顶部：严格限制在窗口内
-            if (top + panelHeight > windowHeight) top = Math.max(10, windowHeight - panelHeight - 10);
-            if (top < 0) top = 10;
-            // 左右：可拖出，但至少30px留在窗口内
-            left = Math.max(dragBackMargin - panelWidth, Math.min(windowWidth - dragBackMargin, left));
+            // 新建窗口时必须完整收回当前浏览器视口。这会自动修复
+            // 在其他显示器、缩放比例或旧窗口尺寸下保存的异常位置。
+            const normalizedGeometry = this.normalizeDetailPanelGeometry({
+                top,
+                left,
+                width: effectiveSavedState ? effectiveSavedState.width : defaultWidth,
+                height: effectiveSavedState ? effectiveSavedState.height : defaultHeight
+            });
+            top = normalizedGeometry.top;
+            left = normalizedGeometry.left;
+            const panelWidth = normalizedGeometry.width;
+            const panelHeight = normalizedGeometry.height;
 
             // 获取新的z-index
-            this.maxZIndex += 1;
+            this.maxZIndex = Math.max(
+                this.maxZIndex + 1,
+                DETAIL_PANEL_Z_INDEX_BASE + 1
+            );
             const zIndex = this.maxZIndex;
 
             const detailPanel = document.createElement('div');
@@ -8410,10 +9304,10 @@
             const panelState = {
                 isMinimized: false,
                 normalState: effectiveSavedState ? {
-                    top: effectiveSavedState.top + 'px',
-                    left: effectiveSavedState.left + 'px',
-                    width: effectiveSavedState.width + 'px',
-                    height: effectiveSavedState.height + 'px',
+                    top: top + 'px',
+                    left: left + 'px',
+                    width: panelWidth + 'px',
+                    height: panelHeight + 'px',
                     maxWidth: '',
                     maxHeight: '',
                     borderRadius: ''
@@ -8628,49 +9522,15 @@
 
                 const rect = detailPanel.getBoundingClientRect();
 
-                // 检查是否有其他元素遮挡
-                const centerX = rect.left + rect.width / 2;
-                const centerY = rect.top + rect.height / 2;
-                const elementsAtPoint = document.elementsFromPoint(centerX, centerY);
-
-                // 检查弹窗是否在元素栈的最上层
-                const panelIndex = elementsAtPoint.indexOf(detailPanel);
-                if (panelIndex > 0) {
-                    // 如果被遮挡，提高z-index
-                    this.maxZIndex = Math.max(this.maxZIndex, 99999);
-                    detailPanel.style.setProperty('z-index', this.maxZIndex, 'important');
-                }
-
-                // 如果弹窗仍然不可见，尝试强制显示
+                // 如果弹窗尺寸异常，先恢复默认尺寸。
                 if (rect.width === 0 || rect.height === 0) {
                     console.warn('弹窗尺寸为0，尝试修复');
                     detailPanel.style.setProperty('width', defaultWidth + 'px', 'important');
                     detailPanel.style.setProperty('height', defaultHeight + 'px', 'important');
                 }
-
-                // 检查弹窗位置：顶部限制在视口内，左右可拖出但至少30px在视口内
-                const viewportWidth = window.innerWidth;
-                const viewportHeight = window.innerHeight;
-                const dragBackMargin = 30;
-
-                let needAdjust = false;
-                let newLeft = rect.left;
-                let newTop = rect.top;
-                if (rect.top < 0 || rect.top + rect.height > viewportHeight) {
-                    newTop = Math.max(10, Math.min(rect.top, viewportHeight - rect.height - 10));
-                    needAdjust = true;
-                }
-                if (rect.left + rect.width < dragBackMargin || rect.left > viewportWidth - dragBackMargin) {
-                    newLeft = Math.max(dragBackMargin - rect.width, Math.min(viewportWidth - dragBackMargin, rect.left));
-                    needAdjust = true;
-                }
-                if (needAdjust) {
-                    detailPanel.style.setProperty('left', newLeft + 'px', 'important');
-                    detailPanel.style.setProperty('top', newTop + 'px', 'important');
-                }
-
-                // 尝试滚动到弹窗位置
-                detailPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // 以关闭按钮所在的可见标题区做最终校验，不再使用可能
+                // 落在屏幕外的“窗口中心点”作为层级修复条件。
+                this.ensureDetailPanelAccessible(panelId);
             }, 100);
             return panelId;
         }
@@ -8680,7 +9540,10 @@
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
 
-            this.maxZIndex += 1;
+            this.maxZIndex = Math.max(
+                this.maxZIndex + 1,
+                DETAIL_PANEL_Z_INDEX_BASE + 1
+            );
             panel.style.setProperty('z-index', this.maxZIndex, 'important');
             panel.style.setProperty('display', 'flex', 'important');
             panel.style.setProperty('visibility', 'visible', 'important');
@@ -8697,6 +9560,21 @@
         closeDetailPanelById(panelId) {
             const panel = this.detailPanels.get(panelId);
             if (panel) {
+                const copySession = this.todoManager
+                    ? this.todoManager.noticeCopySession
+                    : null;
+                if (
+                    copySession
+                    && !copySession.completed
+                    && copySession.targetPanelId === panelId
+                ) {
+                    this.todoManager.finishFeatureUsage(
+                        copySession.usageOperation,
+                        'cancelled',
+                        { resultCode: 'panel-closed' }
+                    );
+                    this.todoManager.noticeCopySession = null;
+                }
                 // 停止观察
                 if (this.detailPanelObservers && this.detailPanelObservers.has(panelId)) {
                     const observer = this.detailPanelObservers.get(panelId);
@@ -8807,14 +9685,14 @@
                     // 将 transform 转换为实际的 top/left 值（使用 requestAnimationFrame 确保在下一帧执行）
                     requestAnimationFrame(() => {
                         const margin = 8;
-                        const dragBackMargin = 30; // 左右可拖出窗口，但至少留30px在窗口内便于通过标题栏拖回
+                        const dragBackMargin = DETAIL_PANEL_DRAG_VISIBLE_WIDTH;
                         const w = window.innerWidth;
                         const h = window.innerHeight;
                         const rect = panel.getBoundingClientRect();
                         let topVal = originalTopValue + currentDeltaY;
                         let leftVal = originalLeftValue + currentDeltaX;
                         topVal = Math.max(margin, Math.min(h - rect.height - margin, topVal)); // 顶部严格限制在窗口内
-                        leftVal = Math.max(dragBackMargin - rect.width, Math.min(w - dragBackMargin, leftVal)); // 左右可拖出，至少30px可见
+                        leftVal = Math.max(dragBackMargin - rect.width, Math.min(w - dragBackMargin, leftVal)); // 左右可拖出，但保留可操作的标题区
                         const finalTop = topVal + 'px';
                         const finalLeft = leftVal + 'px';
                         panel.style.setProperty('top', finalTop, 'important');
@@ -8849,14 +9727,14 @@
                     e.preventDefault();
                     e.stopPropagation();
                     const margin = 8;
-                    const dragBackMargin = 30; // 左右可拖出窗口，但至少留30px在窗口内便于通过标题栏拖回
+                    const dragBackMargin = DETAIL_PANEL_DRAG_VISIBLE_WIDTH;
                     const w = window.innerWidth;
                     const h = window.innerHeight;
                     const rect = panel.getBoundingClientRect();
                     let desiredTop = originalTopValue + (e.clientY - startY);
                     let desiredLeft = originalLeftValue + (e.clientX - startX);
                     desiredTop = Math.max(margin, Math.min(h - rect.height - margin, desiredTop)); // 顶部严格限制在窗口内
-                    desiredLeft = Math.max(dragBackMargin - rect.width, Math.min(w - dragBackMargin, desiredLeft)); // 左右可拖出，至少30px可见
+                    desiredLeft = Math.max(dragBackMargin - rect.width, Math.min(w - dragBackMargin, desiredLeft)); // 左右可拖出，但保留可操作的标题区
                     currentDeltaX = desiredLeft - originalLeftValue;
                     currentDeltaY = desiredTop - originalTopValue;
                 };
@@ -8892,10 +9770,21 @@
                 const clientY = e.clientY ?? (e.touches && e.touches[0] && e.touches[0].clientY);
                 if (clientX == null || clientY == null) return;
 
-                const width = startWidth + (clientX - startX);
-                const height = startHeight + (clientY - startY);
+                const viewport = this.getDetailViewportSize();
+                const maxWidth = Math.max(1, viewport.width - DETAIL_PANEL_VIEWPORT_MARGIN * 2);
+                const maxHeight = Math.max(1, viewport.height - DETAIL_PANEL_VIEWPORT_MARGIN * 2);
+                const effectiveMinWidth = Math.min(minWidth, maxWidth);
+                const effectiveMinHeight = Math.min(minHeight, maxHeight);
+                const width = Math.max(
+                    effectiveMinWidth,
+                    Math.min(maxWidth, startWidth + (clientX - startX))
+                );
+                const height = Math.max(
+                    effectiveMinHeight,
+                    Math.min(maxHeight, startHeight + (clientY - startY))
+                );
 
-                if (width >= minWidth && height >= minHeight) {
+                if (width >= effectiveMinWidth && height >= effectiveMinHeight) {
                     panel.style.width = width + 'px';
                     panel.style.height = height + 'px';
                     if (state && state.normalState) {
@@ -8917,6 +9806,7 @@
                 if (e && e.pointerId != null && resizeHandle.releasePointerCapture) {
                     try { resizeHandle.releasePointerCapture(e.pointerId); } catch (err) {}
                 }
+                this.constrainDetailPanelToViewport(panelId, false);
                 this.saveDetailPanelStateById(panelId);
             };
 
@@ -9065,8 +9955,10 @@
                 this.ensureDetailIframeVisible(panel);
                 // 再延后两帧刷新一次，修复部分浏览器在复杂状态切换后 iframe 仍白屏的问题
                 requestAnimationFrame(() => {
+                    this.constrainDetailPanelToViewport(panelId, false);
                     requestAnimationFrame(() => {
                         this.ensureDetailIframeVisible(panel);
+                        this.ensureDetailPanelAccessible(panelId);
                     });
                 });
 
@@ -9168,6 +10060,7 @@
                 panel.style.removeProperty('min-width');
                 panel.style.setProperty('left', newLeft + 'px', 'important');
                 panel.style.setProperty('top', newTop + 'px', 'important');
+                this.constrainDetailPanelToViewport(panelId, true);
 
                 // 最小化后保存状态
                 setTimeout(() => {
@@ -9285,28 +10178,7 @@
 
                 // 确保窗口在屏幕可见范围内，并在下一帧再次确保 iframe 可见
                 requestAnimationFrame(() => {
-                    const rect = panel.getBoundingClientRect();
-                    const windowWidth = window.innerWidth;
-                    const windowHeight = window.innerHeight;
-                    const dragBackMargin = 30; // 左右可拖出窗口，但至少留30px在窗口内便于通过标题栏拖回
-                    let adjustedLeft = parseFloat(panel.style.left) || rect.left;
-                    let adjustedTop = parseFloat(panel.style.top) || rect.top;
-
-                    // 左右：可拖出窗口，但至少30px留在窗口内
-                    if (adjustedLeft + rect.width < dragBackMargin) adjustedLeft = dragBackMargin - rect.width;
-                    else if (adjustedLeft > windowWidth - dragBackMargin) adjustedLeft = windowWidth - dragBackMargin;
-
-                    // 顶部：严格限制在窗口内
-                    if (adjustedTop + rect.height < 0) adjustedTop = 10;
-                    else if (adjustedTop > windowHeight) adjustedTop = windowHeight - rect.height - 10;
-                    else if (adjustedTop + rect.height > windowHeight) adjustedTop = windowHeight - rect.height - 10;
-                    else if (adjustedTop < 0) adjustedTop = 10;
-
-                    if (adjustedLeft !== (parseFloat(panel.style.left) || rect.left) ||
-                        adjustedTop !== (parseFloat(panel.style.top) || rect.top)) {
-                        panel.style.left = adjustedLeft + 'px';
-                        panel.style.top = adjustedTop + 'px';
-                    }
+                    this.constrainDetailPanelToViewport(panelId, false);
 
                     if (!state.isMinimized) {
                         this.ensureDetailIframeVisible(panel);
@@ -10509,7 +11381,28 @@
         readZzlTransferData(panelId) {
             const sourcePanel = this.detailPanels.get(panelId);
             const active = this.getActiveZzlCreateContext();
+            const usageOperation = this.todoManager.createFeatureUsageOperation(
+                'zzl_read',
+                active ? active.category : '',
+                false
+            );
+            const finishUsage = (outcome, resultCode, details) => {
+                this.todoManager.finishFeatureUsage(
+                    usageOperation,
+                    outcome,
+                    Object.assign({
+                        resultCode,
+                        category: active ? active.category : ''
+                    }, details || {})
+                );
+            };
             if (!sourcePanel || !active) {
+                finishUsage(
+                    'failed',
+                    !sourcePanel
+                        ? 'source-panel-missing'
+                        : 'create-panel-missing'
+                );
                 this.showZzlTransferStatus(
                     sourcePanel,
                     '请先打开并激活一个制造令分项创建窗口。',
@@ -10523,6 +11416,7 @@
                 doc = iframe && (iframe.contentDocument || iframe.contentWindow?.document);
             } catch (e) {}
             if (!doc) {
+                finishUsage('failed', 'source-document-unavailable');
                 this.showZzlTransferStatus(
                     sourcePanel,
                     '无法读取当前制造令页面。',
@@ -10532,6 +11426,7 @@
             }
             const matched = this.findZzlSourceTable(doc, active);
             if (!matched) {
+                finishUsage('failed', 'source-section-not-found');
                 this.showZzlTransferStatus(
                     sourcePanel,
                     '未找到“' + active.category + '”对应的明细表。',
@@ -10546,6 +11441,7 @@
                 Object.keys(data.notes || {}).length +
                 (data.explanation ? 1 : 0);
             if (!data.rows.length && !fieldCount) {
+                finishUsage('failed', 'source-content-empty');
                 this.showZzlTransferStatus(
                     sourcePanel,
                     '已找到“' + active.category + '”表，但未识别到可复制内容。',
@@ -10561,6 +11457,10 @@
                 '读取完成，请到“创建”界面写入',
                 'success'
             );
+            finishUsage('success', 'success', {
+                rowCount: data.rows.length,
+                fieldCount
+            });
         }
 
         setZzlControlValue(control, value) {
@@ -10678,8 +11578,24 @@
                 category: panel.dataset.zzlCategory || '',
                 isMain: panel.dataset.zzlMain === '1'
             };
+            const usageOperation = this.todoManager.createFeatureUsageOperation(
+                'zzl_write',
+                context.category,
+                false
+            );
+            const finishUsage = (outcome, resultCode, details) => {
+                this.todoManager.finishFeatureUsage(
+                    usageOperation,
+                    outcome,
+                    Object.assign({
+                        resultCode,
+                        category: context.category
+                    }, details || {})
+                );
+            };
             const data = this.zzlTransferBuffer;
             if (!data) {
+                finishUsage('failed', 'buffer-empty');
                 this.showZzlTransferStatus(
                     panel,
                     '还没有读取内容，请先在制造令详情窗口点击“读取”。',
@@ -10688,6 +11604,7 @@
                 return;
             }
             if (data.category !== context.category || Boolean(data.isMain) !== Boolean(context.isMain)) {
+                finishUsage('failed', 'category-mismatch');
                 this.showZzlTransferStatus(
                     panel,
                     '已读取“' + data.category + '”，与当前“' +
@@ -10702,6 +11619,7 @@
                 doc = iframe && (iframe.contentDocument || iframe.contentWindow?.document);
             } catch (e) {}
             if (!doc) {
+                finishUsage('failed', 'target-document-unavailable');
                 this.showZzlTransferStatus(
                     panel,
                     '无法访问当前创建页面。',
@@ -10711,6 +11629,7 @@
             }
             const target = this.findZzlTargetTable(doc);
             if (!target && data.rows.length) {
+                finishUsage('failed', 'target-table-not-found');
                 this.showZzlTransferStatus(
                     panel,
                     '未在创建页面中识别到明细表。',
@@ -10739,6 +11658,7 @@
                 }
             }
             if (data.rows.length && !targetRows.length) {
+                finishUsage('failed', 'target-rows-not-found');
                 this.showZzlTransferStatus(
                     panel,
                     '创建页面中没有识别到可填写的明细行。',
@@ -10823,6 +11743,10 @@
                 '写入完成，请仔细核对后提交',
                 'success'
             );
+            finishUsage('success', 'success', {
+                rowCount: filledRows,
+                fieldCount: filledFields
+            });
         }
 
         saveDetailPanelStateById(panelId) {
@@ -10873,21 +11797,11 @@
                 if (saved) {
                     const state = JSON.parse(saved);
                     // 验证状态是否有效
-                    if (state && typeof state.top === 'number' && typeof state.left === 'number' &&
-                        typeof state.width === 'number' && typeof state.height === 'number') {
-                        // 确保位置：顶部严格限制在窗口内，左右可拖出但至少30px在窗口内
-                        const windowWidth = window.innerWidth;
-                        const windowHeight = window.innerHeight;
-                        const dragBackMargin = 30;
-                        const minWidth = 300;
-                        const minHeight = 200;
-
-                        let top = Math.max(0, Math.min(state.top, windowHeight - minHeight));
-                        let left = Math.max(dragBackMargin - state.width, Math.min(windowWidth - dragBackMargin, state.left));
-                        let width = Math.max(minWidth, state.width);
-                        let height = Math.max(minHeight, Math.min(state.height, windowHeight - top));
-
-                        return { top, left, width, height };
+                    if (state && Number.isFinite(state.top) && Number.isFinite(state.left) &&
+                        Number.isFinite(state.width) && Number.isFinite(state.height)) {
+                        // localStorage 在同一内网域名下会被多个浏览器窗口共享。
+                        // 读取时按当前显示器和缩放后的视口重新校正，不盲信旧坐标。
+                        return this.normalizeDetailPanelGeometry(state);
                     }
                 }
             } catch (e) {
