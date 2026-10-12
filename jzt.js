@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.59
+// @version      3.6.62
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -15,6 +15,8 @@
 // @grant        GM_notification
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_listValues
+// @grant        GM_deleteValue
 // @grant        GM_info
 // @grant        unsafeWindow
 // @noframes
@@ -31,6 +33,186 @@
     /* global GBK, GM_info */
 
     const NATIVE_AUTOMATION_CONTEXT_KEY = 'jzt-todo-native-automation-context-v1';
+    const NATIVE_AUTOMATION_CONTEXT_PREFIX = 'jzt-todo-native-automation-context-v2:';
+
+    // GBK 表单不能直接编码不换行空格，会把它提交为字面量 &#160;。
+    // 等量替换这些空格；保留普通多空格、全角空格、制表符和换行。
+    function normalizeBusinessSpaces(value) {
+        return String(value == null ? '' : value)
+            .replace(/&(?:amp;)?(?:nbsp|#0*(?:160|8199|8239)|#x0*(?:a0|2007|202f));/gi, ' ')
+            .replace(/[\u00a0\u2007\u202f]/g, ' ');
+    }
+
+    const businessSpaceGuardDocuments = new WeakSet();
+
+    function isBusinessTextControl(control, allowReadonly = false) {
+        if (!control || control.disabled || (!allowReadonly && control.readOnly)) return false;
+        return control.tagName === 'TEXTAREA' ||
+            (control.tagName === 'INPUT' && /^(?:text|search|tel)$/.test(control.type || 'text'));
+    }
+
+    function normalizeBusinessControl(control, allowReadonly = false) {
+        if (!isBusinessTextControl(control, allowReadonly)) return false;
+        const original = String(control.value || '');
+        const normalized = normalizeBusinessSpaces(original);
+        if (normalized === original) return false;
+        const start = control.selectionStart;
+        const end = control.selectionEnd;
+        const direction = control.selectionDirection;
+        control.value = normalized;
+        if (Number.isFinite(start) && Number.isFinite(end) && control.setSelectionRange) {
+            try {
+                control.setSelectionRange(normalizeBusinessSpaces(original.slice(0, start)).length,
+                    normalizeBusinessSpaces(original.slice(0, end)).length, direction || 'none');
+            } catch (error) {}
+        }
+        return true;
+    }
+
+    function normalizeBusinessForm(form) {
+        Array.from(form && form.elements || []).forEach((control) =>
+            normalizeBusinessControl(control, true));
+    }
+
+    function installBusinessSpaceGuard(doc) {
+        if (!doc || !doc.addEventListener || businessSpaceGuardDocuments.has(doc)) return;
+        businessSpaceGuardDocuments.add(doc);
+
+        doc.addEventListener('copy', (event) => {
+            if (!event.clipboardData) return;
+            const active = doc.activeElement;
+            // 不接管密码等非业务文本控件的复制。
+            if (active && active.tagName === 'INPUT' && !isBusinessTextControl(active, true)) return;
+            const view = doc.defaultView;
+            const selection = view && view.getSelection ? view.getSelection() : null;
+            let original = selection ? selection.toString() : '';
+            if (isBusinessTextControl(active, true) && Number.isFinite(active.selectionStart)) {
+                original = String(active.value || '').slice(active.selectionStart, active.selectionEnd);
+            }
+            const normalized = normalizeBusinessSpaces(original);
+            if (original && normalized !== original) {
+                event.clipboardData.setData('text/plain', normalized);
+                event.preventDefault();
+            }
+        }, true);
+
+        doc.addEventListener('paste', (event) => {
+            const control = event.target;
+            if (!isBusinessTextControl(control) || !event.clipboardData) return;
+            const original = event.clipboardData.getData('text/plain');
+            let normalized = normalizeBusinessSpaces(original);
+            if (normalized === original) return;
+            if (!Number.isFinite(control.selectionStart) || !control.setRangeText) return;
+            const start = control.selectionStart;
+            const end = control.selectionEnd;
+            if (control.maxLength >= 0) {
+                normalized = normalized.slice(0, Math.max(0,
+                    control.maxLength - (control.value.length - (end - start))));
+            }
+            event.preventDefault();
+            control.setRangeText(normalized, start, end, 'end');
+            const view = doc.defaultView || window;
+            const InputEventConstructor = view.InputEvent || view.Event;
+            control.dispatchEvent(new InputEventConstructor('input', {
+                bubbles: true, inputType: 'insertFromPaste', data: normalized
+            }));
+        }, true);
+
+        const normalizeInput = (event) => normalizeBusinessControl(event.target);
+        doc.addEventListener('input', normalizeInput, true);
+        doc.addEventListener('change', normalizeInput, true);
+        doc.addEventListener('submit', (event) => normalizeBusinessForm(event.target), true);
+
+        // formdata 同时覆盖正常提交、原页面 form.submit() 和 FormData 构造。
+        doc.addEventListener('formdata', (event) => {
+            const data = event.formData;
+            if (!data || !event.target || !event.target.elements) return;
+            const controls = Array.from(event.target.elements);
+            const blockedNames = new Set(controls
+                .filter((control) => control.name && !isBusinessTextControl(control, true))
+                .map((control) => control.name));
+            const names = new Set(controls
+                .filter((control) => isBusinessTextControl(control, true) && control.name)
+                .filter((control) => !blockedNames.has(control.name))
+                .map((control) => control.name));
+            const entries = Array.from(data.entries());
+            const changed = entries.some(([name, value]) => names.has(name) &&
+                typeof value === 'string' && normalizeBusinessSpaces(value) !== value);
+            if (!changed) return;
+            // 重建时保留原顺序、重复字段和 File 对象。
+            Array.from(new Set(entries.map(([name]) => name))).forEach((name) => data.delete(name));
+            entries.forEach(([name, value]) => data.append(name,
+                names.has(name) && typeof value === 'string' ? normalizeBusinessSpaces(value) : value));
+        }, true);
+
+        // 老 ASP 页常用脚本直接 submit，提前清理表单控件以兼容其校验代码。
+        try {
+            const view = doc === document && typeof unsafeWindow !== 'undefined'
+                ? unsafeWindow : doc.defaultView;
+            const prototype = view && view.HTMLFormElement && view.HTMLFormElement.prototype;
+            const nativeSubmit = prototype && prototype.submit;
+            if (typeof nativeSubmit === 'function' && !nativeSubmit.__jztBusinessSpaceGuard) {
+                const guardedSubmit = function() {
+                    normalizeBusinessForm(this);
+                    return nativeSubmit.apply(this, arguments);
+                };
+                guardedSubmit.__jztBusinessSpaceGuard = true;
+                prototype.submit = guardedSubmit;
+            }
+        } catch (error) {}
+
+        // @noframes：由主脚本给同域详情和旧系统内嵌页面安装相同处理。
+        const installFrame = (frame) => {
+            try { installBusinessSpaceGuard(frame.contentDocument); } catch (error) {}
+        };
+        doc.addEventListener('load', (event) => {
+            if (event.target && event.target.tagName === 'IFRAME') installFrame(event.target);
+        }, true);
+        if (doc.querySelectorAll) Array.from(doc.querySelectorAll('iframe')).forEach(installFrame);
+    }
+
+    // 原生创建/办理页也要安装；必须位于非入口页面的提前 return 之前。
+    installBusinessSpaceGuard(document);
+
+    function readNativeTaskContexts() {
+        const contexts = new Map();
+        const now = Date.now();
+        const keys = typeof GM_listValues === 'function' ? GM_listValues() : [];
+        keys.filter((key) => key.startsWith(NATIVE_AUTOMATION_CONTEXT_PREFIX))
+            .concat([NATIVE_AUTOMATION_CONTEXT_KEY]).forEach((key) => {
+                try {
+                    const raw = GM_getValue(key, '');
+                    const item = typeof raw === 'string' ? JSON.parse(raw || 'null') : raw;
+                    if (!item || !item.taskId) return;
+                    const age = now - Number(item.completionSucceededAt || item.actionAt || item.openedAt || 0);
+                    const maxAge = item.completionSucceededAt ? 24 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000;
+                    if (age < 0 || age > maxAge) {
+                        if (typeof GM_deleteValue === 'function') GM_deleteValue(key);
+                        return;
+                    }
+                    if (!contexts.has(item.taskId)) contexts.set(item.taskId, item);
+                } catch (error) {}
+            });
+        return Array.from(contexts.values());
+    }
+
+    function saveNativeTaskContext(context) {
+        GM_setValue(
+            NATIVE_AUTOMATION_CONTEXT_PREFIX + context.taskId,
+            JSON.stringify(context)
+        );
+    }
+
+    function deleteNativeTaskContext(taskId) {
+        const key = NATIVE_AUTOMATION_CONTEXT_PREFIX + taskId;
+        if (typeof GM_deleteValue === 'function') GM_deleteValue(key);
+        else GM_setValue(key, '');
+        try {
+            const raw = GM_getValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
+            const legacy = typeof raw === 'string' ? JSON.parse(raw || 'null') : raw;
+            if (legacy && legacy.taskId === taskId) GM_setValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
+        } catch (error) {}
+    }
     const entryPaths = new Set(['/notice/', '/zzl/', '/jigui/']);
     const currentPath = String(window.location.pathname || '').toLowerCase();
     const isMainEntryPage = entryPaths.has(currentPath);
@@ -44,17 +226,9 @@
         let completed = false;
         let checking = false;
 
-        const readContext = () => {
-            try {
-                const raw = GM_getValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
-                return typeof raw === 'string' ? JSON.parse(raw || 'null') : raw;
-            } catch (error) {
-                return null;
-            }
-        };
         const writeContext = (context) => {
             try {
-                GM_setValue(NATIVE_AUTOMATION_CONTEXT_KEY, JSON.stringify(context));
+                saveNativeTaskContext(context);
             } catch (error) {}
         };
         const getUrlId = (value) => {
@@ -123,14 +297,7 @@
         );
         const inspect = () => {
             if (completed || checking || !document.body) return;
-            const context = readContext();
             const now = Date.now();
-            if (
-                !context
-                || !context.taskId
-                || !context.actionAt
-                || now - Number(context.actionAt) > 2 * 60 * 60 * 1000
-            ) return;
             const text = String(document.body.innerText || document.body.textContent || '')
                 .replace(/\u00a0/g, ' ')
                 .replace(/\s+/g, '')
@@ -138,7 +305,6 @@
             if (!text || /失败|不成功|未成功|错误|无权限/.test(text)) return;
             if (!/成功|办理完成|操作完成|提交完成|恭喜/.test(text)) return;
 
-            const expectedId = String(context.detailId || '');
             const numberMatch = text.match(/自动编号为[：:]?(\d+)/);
             const resultId = numberMatch ? numberMatch[1] : '';
             let openerId = '';
@@ -146,10 +312,29 @@
                 openerId = getUrlId(window.opener && window.opener.location.href);
             } catch (error) {}
             const currentId = getUrlId(window.location.href);
-            const idMatched = expectedId
-                ? [resultId, openerId, currentId].includes(expectedId)
-                : Boolean(context.docNo && text.includes(String(context.docNo).replace(/\s+/g, '')));
-            if (!idMatched) return;
+            // 结果页自身编号优先；避免从 opener 的另一个单据误匹配。
+            const actualId = resultId || currentId || openerId;
+            const modulePath = window.location.pathname.split('/')[1].toLowerCase();
+            const resultType = /会签/.test(text) ? '待会签'
+                : /校核/.test(text) ? '待校核'
+                    : /批准|审批/.test(text) ? '待批准' : '';
+            const deviceId = String(GM_getValue(deviceIdKey, '') || '');
+            const candidates = readNativeTaskContexts().filter((item) => {
+                if (!item.actionAt || item.completionSucceededAt ||
+                    Number(item.recheckAfter || 0) > now ||
+                    now - Number(item.actionAt) > 2 * 60 * 60 * 1000 ||
+                    (item.deviceId && item.deviceId !== deviceId) ||
+                    (resultType && item.taskType !== resultType)) return false;
+                try {
+                    if (new URL(item.detailUrl).pathname.split('/')[1].toLowerCase() !== modulePath) return false;
+                } catch (error) { return false; }
+                return item.detailId
+                    ? Boolean(actualId && actualId === String(item.detailId))
+                    : Boolean(item.docNo && text.includes(String(item.docNo).replace(/\s+/g, '')));
+            });
+            // 同一编号存在多个阶段而结果页未标明阶段时，保留手动完成入口。
+            if (candidates.length !== 1) return;
+            const context = candidates[0];
 
             const claimedAt = Number(context.completionClaimedAt || 0);
             if (claimedAt && now - claimedAt < 2 * 60 * 1000) return;
@@ -164,7 +349,10 @@
                     '/tasks/' + encodeURIComponent(context.taskId) + '/complete',
                     { source: 'auto-success-page' }
                 ))
-                .then(() => {
+                .then((payload) => {
+                    if (!payload.task || payload.task.status !== 'completed') {
+                        throw new Error('服务器未确认待办已完成');
+                    }
                     completed = true;
                     context.completionSucceededAt = Date.now();
                     writeContext(context);
@@ -178,6 +366,7 @@
                 .catch((error) => {
                     checking = false;
                     context.completionClaimedAt = 0;
+                    context.recheckAfter = Date.now() + 30000;
                     context.lastError = String(error && error.message || error).slice(0, 120);
                     writeContext(context);
                     record(
@@ -877,6 +1066,8 @@
             this.automationTimeouts = new Map();
             this.nativeAutomationResultHandler = null;
             this.initialized = false;
+            this.settingsRevision = 0;
+            this.clientSettingsReportPromise = null;
         }
 
         loadCachedProfile() {
@@ -1055,7 +1246,9 @@
 
         initializeIdentity() {
             this.ensureDeviceCredentials();
+            const revision = this.settingsRevision;
             this.request('GET', '/identity/me').then((payload) => {
+                if (revision !== this.settingsRevision) return;
                 this.profile = payload.profile;
                 this.identityReady = true;
                 this.cacheProfile(this.profile);
@@ -1684,7 +1877,12 @@
             }
             this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/complete', {
                 source: 'manual-complete-button'
-            }).then(() => {
+            }).then((payload) => {
+                if (!payload.task || payload.task.status !== 'completed') {
+                    throw new Error('服务器未确认待办已完成');
+                }
+                this.automationCompletedTaskIds.add(task.id);
+                this.clearAutomationTimeouts(task.id);
                 this.clearNativeAutomationContext(task.id);
                 this.tasks = this.tasks.filter((item) => item.id !== task.id);
                 this.renderTasks();
@@ -1805,30 +2003,23 @@
             if (!this.identityReady || !this.profile) {
                 return Promise.resolve(false);
             }
-            return this.request(
+            const reporting = this.request(
                 'POST',
                 '/identity/client-settings',
                 this.getClientSettings(overrides)
-            ).then((payload) => {
-                if (payload && payload.profile) {
-                    this.profile = payload.profile;
-                    this.cacheProfile(this.profile);
-                }
-                return true;
-            }).catch((error) => {
+            ).then(() => true).catch((error) => {
                 // 设置状态上报失败不影响搜索、待办及制造令功能。
                 console.warn('[设置状态] 上报失败:', error.message);
                 return false;
             });
+            this.clientSettingsReportPromise = reporting;
+            return reporting;
         }
 
-        readNativeAutomationContext() {
-            try {
-                const raw = GM_getValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
-                return typeof raw === 'string' ? JSON.parse(raw || 'null') : raw;
-            } catch (error) {
-                return null;
-            }
+        readNativeAutomationContext(taskId) {
+            return readNativeTaskContexts().find((context) =>
+                !taskId || context.taskId === taskId
+            ) || null;
         }
 
         writeNativeAutomationContext(task, pageUrl, actionAt) {
@@ -1844,33 +2035,41 @@
                 actionAt: Number(actionAt) || 0,
                 clientVersion: TODO_CLIENT_VERSION
             };
+            context.userId = this.profile && this.profile.id || '';
+            context.deviceId = this.deviceId || '';
             try {
-                GM_setValue(NATIVE_AUTOMATION_CONTEXT_KEY, JSON.stringify(context));
+                const existing = this.readNativeAutomationContext(task.id);
+                // 重开同一任务不清除正在办理的原生窗口上下文。
+                if (!actionAt && existing && existing.actionAt) return;
+                saveNativeTaskContext(context);
             } catch (error) {
                 console.warn('[待办自动回传] 无法保存原生窗口任务上下文:', error);
             }
         }
 
         clearNativeAutomationContext(taskId) {
-            const context = this.readNativeAutomationContext();
-            if (!context || (taskId && context.taskId !== taskId)) return;
-            try {
-                GM_setValue(NATIVE_AUTOMATION_CONTEXT_KEY, '');
-            } catch (error) {}
+            if (!taskId) return;
+            try { deleteNativeTaskContext(taskId); } catch (error) {}
         }
 
         bindNativeAutomationResultSync() {
             if (this.nativeAutomationResultHandler) return;
             this.nativeAutomationResultHandler = () => {
                 if (document.visibilityState === 'hidden') return;
-                const context = this.readNativeAutomationContext();
-                if (!context || !context.completionSucceededAt) return;
-                const taskId = String(context.taskId || '');
-                if (!taskId) return;
-                this.tasks = this.tasks.filter((task) => task.id !== taskId);
+                const completed = readNativeTaskContexts().filter((context) =>
+                    context.completionSucceededAt &&
+                    (!context.userId || context.userId === (this.profile && this.profile.id))
+                );
+                if (!completed.length) return;
+                const ids = new Set(completed.map((context) => context.taskId));
+                ids.forEach((id) => {
+                    this.automationCompletedTaskIds.add(id);
+                    this.clearAutomationTimeouts(id);
+                });
+                this.tasks = this.tasks.filter((task) => !ids.has(task.id));
                 this.renderTasks();
                 this.refreshTasks(false, 'action').finally(() => {
-                    this.clearNativeAutomationContext(taskId);
+                    ids.forEach((id) => this.clearNativeAutomationContext(id));
                 });
             };
             window.addEventListener('focus', this.nativeAutomationResultHandler);
@@ -1884,7 +2083,16 @@
             const docNo = String(panel.dataset.todoSourceTaskDocNo || '').trim();
             if (!id || !['待会签', '待校核', '待批准'].includes(taskType)) return null;
             const currentTask = this.tasks.find((item) => item.id === id);
-            return currentTask || { id, taskType, docNo };
+            return currentTask && this.isTaskAutomationActive(currentTask)
+                ? currentTask : null;
+        }
+
+        isTaskAutomationActive(task) {
+            return Boolean(task && task.id && this.profile &&
+                this.profile.receiveTasks !== false &&
+                !this.automationCompletedTaskIds.has(task.id) &&
+                (!task.status || task.status === 'pending') &&
+                this.tasks.some((current) => current.id === task.id));
         }
 
         getAutomationActionWords(taskType) {
@@ -1980,7 +2188,8 @@
         }
 
         markAutomationAction(panel, task, iframeDoc, pageUrl, descriptor) {
-            if (!panel || !task) return;
+            if (!panel || !this.isTaskAutomationActive(task) ||
+                this.automationCompletingTaskIds.has(task.id)) return;
             const now = Date.now();
             const previous = Number(panel.dataset.todoAutomationActionAt || 0);
             panel.dataset.todoAutomationActionAt = String(now);
@@ -2047,17 +2256,51 @@
                 '待批准': { labels: ['批准', '审批'], pending: /未批准|待批准|未审批|待审批/ }
             }[task.taskType];
             if (!config) return false;
-            const value = this.extractLabelValue(iframeDoc, config.labels)
-                .replace(/\u00a0/g, '')
-                .replace(/\s+/g, '')
-                .trim();
-            return Boolean(value) && !config.pending.test(value);
+            const names = Array.from(new Set([
+                this.profile && this.profile.name,
+                this.profile && this.profile.systemName,
+                this.systemUser
+            ].map((name) => this.normalizePersonName(name)).filter(Boolean)));
+            if (!names.length) return false;
+            const labels = config.labels.map((label) => label.replace(/\s+/g, ''));
+            const values = Array.from(iframeDoc.querySelectorAll('td, th'))
+                .filter((cell) => labels.includes(String(cell.textContent || '')
+                    .replace(/[：:\s]/g, '')))
+                .map((cell) => cell.nextElementSibling)
+                .filter(Boolean)
+                .map((cell) => String(cell.innerText || cell.textContent || ''));
+            return values.some((value) => {
+                const compact = value.replace(/[\s\u00a0]/g, '');
+                if (!compact) return false;
+                if (task.taskType === '待会签') {
+                    // 会签栏可能同时列出多人及“未会签”按钮，只认本人的签署条目。
+                    const signatures = Array.from(compact.matchAll(
+                        /会签人[：:]([^()（）]*?)(?=时间[：:]?|日期[：:]?|\d{4}[\/.-]|[()（）]|$)/g
+                    ));
+                    if (signatures.length) {
+                        return signatures.some((match) => {
+                            const tail = compact.slice(match.index + match[0].length)
+                                .split(/[()（）]/)[0];
+                            return names.includes(this.normalizePersonName(match[1])) &&
+                                /^(?:(?:时间|日期)[：:]?)?\d{4}[\/.-]\d{1,2}[\/.-]\d{1,2}/.test(tail) &&
+                                !/未会签|待会签|失败|错误/.test(tail);
+                        });
+                    }
+                }
+                if (config.pending.test(compact) || /失败|错误|无权限/.test(compact)) return false;
+                // 单人签署字段通常为“姓名”或“姓名2026/10/12”。
+                // 未识别的格式保持待办理，由成功页或人工确认完成。
+                return names.some((name) => compact === name ||
+                    (compact.startsWith(name) &&
+                        /^(?:[：:]?\d{4}[\/.-]\d{1,2}[\/.-]\d{1,2}|[（(](?:时间|日期)[：:]?\d{4}[\/.-])/.test(
+                            compact.slice(name.length)
+                        )));
+            });
         }
 
         autoCompleteTask(task, source, detectionMethod, pageUrl, panel) {
             if (
-                !task
-                || !task.id
+                !this.isTaskAutomationActive(task)
                 || this.automationCompletingTaskIds.has(task.id)
                 || this.automationCompletedTaskIds.has(task.id)
             ) return;
@@ -2066,7 +2309,10 @@
             this.showAutomationState(panel, '已确认完成，正在自动回传待办…', false);
             this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/complete', {
                 source
-            }).then(() => {
+            }).then((payload) => {
+                if (!payload.task || payload.task.status !== 'completed') {
+                    throw new Error('服务器未确认待办已完成');
+                }
                 this.automationCompletingTaskIds.delete(task.id);
                 this.automationCompletedTaskIds.add(task.id);
                 this.clearNativeAutomationContext(task.id);
@@ -2578,6 +2824,7 @@
             }
 
             const save = () => {
+                if (saveButton.disabled) return;
                 const name = nameInput.value.trim();
                 const department = departmentInput.value.trim();
                 const receiveTasks = receiveTasksInput.checked;
@@ -2621,7 +2868,11 @@
                         zzlApprovalStatus: zzlApprovalStatusEnabled
                     };
                 this.ensureDeviceCredentials();
-                this.request('POST', path, body).then((payload) => {
+                const revision = ++this.settingsRevision;
+                // 先让启动上报结束，再保存新设置，避免服务端也被旧请求覆盖。
+                Promise.resolve(this.clientSettingsReportPromise)
+                    .then(() => this.request('POST', path, body)).then((payload) => {
+                    if (revision !== this.settingsRevision) return;
                     GM_setValue(
                         TODO_DESKTOP_NOTIFICATION_KEY,
                         desktopNotificationEnabled
@@ -4148,7 +4399,7 @@
                     sibling = sibling.nextElementSibling;
                 }
             });
-            return results.filter((control) => !control.disabled);
+            return results.filter((control) => this.isCopyControlWritable(control));
         }
 
         waitForCopyCondition(test, timeoutMs = 3500) {
@@ -4187,7 +4438,8 @@
         }
 
         setCopyTextControl(control, value) {
-            if (control == null || value == null) return false;
+            if (!this.isCopyControlWritable(control) || value == null) return false;
+            value = normalizeBusinessSpaces(value);
             if (String(control.value || '') === String(value)) return true;
             const view = control.ownerDocument.defaultView || window;
             const prototype = control.tagName === 'TEXTAREA'
@@ -4225,7 +4477,8 @@
             if (!desired) return { status: 'skipped' };
             const match = await this.waitForCopyCondition(() => {
                 const selects = isNoticeType
-                    ? Array.from(doc.querySelectorAll('select'))
+                    ? Array.from(doc.querySelectorAll('select')).filter((control) =>
+                        this.isCopyControlWritable(control))
                     : this.findCopyControls(doc, aliases, 'select');
                 for (const select of selects) {
                     const option = this.findMatchingSelectOption(select, desired);
@@ -4745,7 +4998,7 @@
         }
 
         normalizeExactCopyValue(value) {
-            return String(value || '')
+            return normalizeBusinessSpaces(value || '')
                 .replace(/\u00a0/g, ' ')
                 .replace(/[\u200B-\u200D\uFEFF]/g, '')
                 .replace(/[（]/g, '(')
@@ -4755,7 +5008,7 @@
         }
 
         normalizeCopyInputValue(value) {
-            return String(value == null ? '' : value)
+            return normalizeBusinessSpaces(value)
                 .replace(/\r\n?/g, '\n')
                 .replace(/\u00a0/g, ' ')
                 .trim();
@@ -4822,7 +5075,7 @@
             );
             return Array.from(doc.querySelectorAll(selector)).filter(
                 (control) => {
-                    if (control.disabled) return false;
+                    if (!this.isCopyControlWritable(control)) return false;
                     const labels = this.getControlFieldLabelCandidates(
                         doc,
                         control
@@ -4848,7 +5101,7 @@
         isCopyControlVisible(control) {
             if (!control || !control.isConnected) return false;
             if (
-                control.hidden
+                control.hasAttribute('hidden')
                 || String(control.type || '').toLowerCase() === 'hidden'
             ) return false;
             const view = control.ownerDocument
@@ -4860,7 +5113,8 @@
                 && element.nodeType === 1
                 && element !== control.ownerDocument.documentElement
             ) {
-                if (element.hidden) return false;
+                // form.hidden 可能被同名表单字段遮蔽，必须查真实属性。
+                if (element.hasAttribute('hidden')) return false;
                 if (view && typeof view.getComputedStyle === 'function') {
                     const style = view.getComputedStyle(element);
                     if (
@@ -4872,6 +5126,48 @@
                 element = element.parentElement;
             }
             return true;
+        }
+
+        isCopyControlWritable(control) {
+            return Boolean(control && !control.disabled && !control.readOnly
+                && !control.matches(':disabled')
+                && /^(INPUT|TEXTAREA|SELECT)$/.test(control.tagName)
+                && !/^(hidden|button|submit|reset|file|password)$/i.test(control.type || '')
+                && this.isCopyControlVisible(control));
+        }
+
+        isCopyControlInExactField(doc, control, aliases) {
+            const matches = (text) => aliases.some((alias) =>
+                this.getDestinationFieldLabel(text) === this.normalizeCopyText(alias));
+            if (control.id) {
+                const label = doc.querySelector('label[for="' + CSS.escape(control.id) + '"]');
+                if (label && matches(this.getElementOwnText(label))) return true;
+            }
+            const label = control.closest('label');
+            if (label && matches(this.getElementOwnText(label))) return true;
+            const cell = control.closest('td,th');
+            if (!cell) return false;
+            // 不跨过其他栏目去找输入框，避免把“执行信息”等展示项
+            // 错配到相邻栏目（乃至整张嵌套表）里的可编辑控件。
+            if (matches(this.getElementOwnText(cell))) return true;
+            const previous = cell.previousElementSibling;
+            return Boolean(previous && matches(this.getElementOwnText(previous)));
+        }
+
+        getCopySchemaControls(doc, definition) {
+            const controls = this.getCopyFieldControls(doc, definition.aliases);
+            if (String(definition.key || '').startsWith('generic:')) {
+                Object.keys(controls).forEach((key) => {
+                    controls[key] = controls[key].filter((control) =>
+                        this.isCopyControlInExactField(doc, control, definition.aliases));
+                });
+            }
+            return controls;
+        }
+
+        isCopySchemaFieldApplicable(doc, definition) {
+            return Object.values(this.getCopySchemaControls(doc, definition))
+                .some((controls) => controls.length > 0);
         }
 
         getCompleteCopyCheckboxGroup(doc, aliases) {
@@ -4889,7 +5185,7 @@
                     root.querySelectorAll('input[type="checkbox"]')
                 ).forEach((checkbox) => {
                     if (
-                        !checkbox.disabled
+                        this.isCopyControlWritable(checkbox)
                         && !results.includes(checkbox)
                     ) results.push(checkbox);
                 });
@@ -4965,16 +5261,10 @@
                     this.getCompleteCopyCheckboxGroup(doc, aliases)
                 )
             ));
-            const allControls = Object.values(controls).flat();
-            if (allControls.some((control) =>
-                this.isCopyControlVisible(control)
-            )) {
-                Object.keys(controls).forEach((key) => {
-                    controls[key] = controls[key].filter((control) =>
-                        this.isCopyControlVisible(control)
-                    );
-                });
-            }
+            Object.keys(controls).forEach((key) => {
+                controls[key] = controls[key].filter((control) =>
+                    this.isCopyControlWritable(control));
+            });
             return controls;
         }
 
@@ -5075,10 +5365,7 @@
                 ? desired.map((item) => this.normalizeExactCopyValue(item))
                 : [];
             const found = await this.waitForCopyCondition(() => {
-                const controls = this.getCopyFieldControls(
-                    doc,
-                    definition.aliases
-                );
+                const controls = this.getCopySchemaControls(doc, definition);
                 const expectedReady = definition.preferredType === 'select'
                     ? controls.selects.length > 0
                     : definition.preferredType === 'textarea'
@@ -5093,9 +5380,9 @@
             }, timeoutMs);
             if (!found) {
                 return {
-                    status: 'failed',
+                    status: this.isCopySchemaFieldApplicable(doc, definition) ? 'failed' : 'skipped',
                     label: definition.label,
-                    reason: '未找到对应控件'
+                    reason: '当前创建页没有对应的可填写控件'
                 };
             }
 
@@ -5114,10 +5401,7 @@
                 )
             ) {
                 const selectMatch = await this.waitForCopyCondition(() => {
-                    const current = this.getCopyFieldControls(
-                        doc,
-                        definition.aliases
-                    );
+                    const current = this.getCopySchemaControls(doc, definition);
                     for (const select of current.selects) {
                         const option = this.findExactCopyOption(select, desired);
                         if (option) return { select, option };
@@ -5125,10 +5409,7 @@
                     return null;
                 }, Math.max(1800, timeoutMs));
                 if (!selectMatch) {
-                    const current = this.getCopyFieldControls(
-                        doc,
-                        definition.aliases
-                    );
+                    const current = this.getCopySchemaControls(doc, definition);
                     if (definition.key === 'workNo') {
                         current.selects.forEach((select) => {
                             select.selectedIndex = -1;
@@ -5251,10 +5532,7 @@
         }
 
         verifyCopySchemaField(doc, definition) {
-            const controls = this.getCopyFieldControls(
-                doc,
-                definition.aliases
-            );
+            const controls = this.getCopySchemaControls(doc, definition);
             const desired = definition.value;
             const expected = this.normalizeExactCopyValue(desired);
             if (definition.preferredType === 'select') {
@@ -5413,13 +5691,13 @@
                         const checkbox = Array.from(
                             cell.querySelectorAll('input[type="checkbox"]')
                         ).find((input) =>
-                            !input.disabled
+                            this.isCopyControlWritable(input)
                             && input.closest('table') === model.table
                         );
                         if (checkbox) result.set(label, checkbox);
                     }
                 );
-                if (result.size >= 3) return result;
+                if (result.size > 0) return result;
             }
             return new Map();
         }
@@ -5445,6 +5723,10 @@
                     : null;
             }, 3000);
             if (!matched) {
+                if (this.findDistributionTableModel(doc)) {
+                    return { status: 'skipped', rowCount: 0,
+                        label: '发送部门', reason: '当前创建页发送部门不可填写' };
+                }
                 return {
                     status: 'failed',
                     label: '发送部门打点（' + desired.length + '项）',
@@ -5454,6 +5736,7 @@
             }
             const missing = desired.filter(
                 (label) => !matched.checkboxMap.has(label)
+                    && !Object.values(matched.model.headerByColumn).includes(label)
             );
             matched.checkboxMap.forEach((checkbox, label) => {
                 const shouldBeChecked = desired.includes(label);
@@ -5501,7 +5784,7 @@
                 const editable = Array.from(
                     row.querySelectorAll('input,textarea,select')
                 ).filter((control) =>
-                    !control.disabled
+                    this.isCopyControlWritable(control)
                     && control.closest('table') === model.table
                     && !/^(button|submit|reset|hidden)$/i.test(
                         control.type || ''
@@ -5528,7 +5811,8 @@
             ));
             return Array.from(new Set(controls)).find((control) => {
                 if (
-                    control.disabled
+                    control.disabled || control.matches(':disabled')
+                    || !this.isCopyControlVisible(control)
                 ) return false;
                 const caption = this.normalizeCopyText(
                     control.value || control.textContent || ''
@@ -5545,7 +5829,7 @@
             const controls = Array.from(
                 cell.querySelectorAll('input,textarea,select')
             ).filter((control) =>
-                !control.disabled
+                this.isCopyControlWritable(control)
                 && control.closest('table') === model.table
                 && !/^(button|submit|reset|hidden)$/i.test(
                     control.type || ''
@@ -5628,6 +5912,10 @@
                 model,
                 sectionType
             );
+            if (!targetRows.length && !this.findAddMaterialButton(model)) {
+                return { status: 'skipped', rowCount: 0, label: sectionLabel + '明细',
+                    reason: '当前创建页此明细表不可填写' };
+            }
             let addAttempts = 0;
             while (
                 targetRows.length < rows.length
@@ -5710,6 +5998,7 @@
             };
             const keys = Object.keys(fieldLabels);
             const failures = [];
+            const writableRows = new Set();
             rows.forEach((sourceRow, sourceIndex) => {
                 const target = targetRows[sourceIndex];
                 keys.forEach((key) => {
@@ -5718,12 +6007,6 @@
                         ? Boolean(sourceRow[key])
                         : String(sourceRow[key] == null ? '' : sourceRow[key]);
                     if (!columnExists) {
-                        if (sourceValue !== '' && sourceValue !== false) {
-                            failures.push(
-                                '第' + (sourceIndex + 1) + '行'
-                                + fieldLabels[key] + '：目标页无此列'
-                            );
-                        }
                         return;
                     }
                     const control = this.getTargetMaterialControl(
@@ -5732,14 +6015,9 @@
                         key
                     );
                     if (!control) {
-                        if (sourceValue !== '' && sourceValue !== false) {
-                            failures.push(
-                                '第' + (sourceIndex + 1) + '行'
-                                + fieldLabels[key] + '：未找到输入框'
-                            );
-                        }
                         return;
                     }
+                    writableRows.add(sourceIndex);
                     if (key === 'isNewMaterial') {
                         if (control.checked !== sourceValue) {
                             this.dispatchCopyChange(control, true);
@@ -5757,13 +6035,20 @@
             });
 
             model = this.findMaterialTableModel(doc, sectionType);
+            if (!model) return {
+                status: 'failed', label: sectionLabel + '明细', rowCount: 0,
+                reason: '回填后未找到物料表'
+            };
             targetRows = this.getTargetMaterialDataRows(
                 model,
                 sectionType
             );
             rows.forEach((sourceRow, sourceIndex) => {
                 const target = targetRows[sourceIndex];
-                if (!target) return;
+                if (!target) {
+                    failures.push('第' + (sourceIndex + 1) + '行：回填后明细行消失');
+                    return;
+                }
                 keys.forEach((key) => {
                     if (model.columns[key] == null) return;
                     const control = this.getTargetMaterialControl(
@@ -5790,6 +6075,8 @@
             });
             return {
                 status: failures.length ? 'failed' : 'applied',
+                rowCount: rows.filter((row, index) => targetRows[index] && writableRows.has(index) &&
+                    !failures.some((failure) => failure.startsWith('第' + (index + 1) + '行'))).length,
                 label: sectionLabel + '明细（' + rows.length + '行）',
                 type: 'material-table',
                 reason: failures.join('；')
@@ -5881,7 +6168,7 @@
                 const editable = Array.from(
                     row.querySelectorAll('input,textarea,select')
                 ).filter((control) =>
-                    !control.disabled
+                    this.isCopyControlWritable(control)
                     && control.closest('table') === model.table
                     && !/^(button|submit|reset|hidden)$/i.test(
                         control.type || ''
@@ -5901,7 +6188,7 @@
             return Array.from(
                 cell.querySelectorAll('input,textarea,select')
             ).find((control) =>
-                !control.disabled
+                this.isCopyControlWritable(control)
                 && control.closest('table') === model.table
                 && !/^(button|submit|reset|hidden|checkbox|radio)$/i.test(
                     control.type || ''
@@ -5920,7 +6207,8 @@
                     'button,input[type="button"],input[type="submit"]'
                 )
             )).find((control) =>
-                !control.disabled
+                !control.disabled && !control.matches(':disabled')
+                && this.isCopyControlVisible(control)
                 && this.normalizeCopyText(
                     control.value || control.textContent || ''
                 ) === '+'
@@ -5929,13 +6217,18 @@
 
         async applyCopiedJiguiRelationRows(doc, sourceRows) {
             const rows = Array.isArray(sourceRows) ? sourceRows : [];
-            if (!rows.length) return;
+            if (!rows.length) return { status: 'skipped', rowCount: 0 };
             let model = await this.waitForCopyCondition(
                 () => this.findJiguiRelationTableModel(doc, false),
                 3000
             );
-            if (!model) return;
+            if (!model) return { status: 'failed', label: '关联明细', rowCount: 0,
+                reason: '未找到关联明细表' };
             let targetRows = this.getTargetJiguiRelationRows(model);
+            if (!targetRows.length && !this.findAddJiguiRelationButton(model)) {
+                return { status: 'skipped', rowCount: 0, label: '关联明细',
+                    reason: '当前创建页关联明细不可填写' };
+            }
             let attempts = 0;
             while (
                 targetRows.length < rows.length
@@ -5950,22 +6243,66 @@
                 if (!model) break;
                 targetRows = this.getTargetJiguiRelationRows(model);
             }
-            rows.slice(0, targetRows.length).forEach((sourceRow, index) => {
+            if (!model || targetRows.length < rows.length) return {
+                status: 'failed', label: '关联明细', rowCount: 0,
+                reason: '明细行不足，需要' + rows.length + '行'
+            };
+            const failures = [];
+            let rowCount = 0;
+            rows.forEach((sourceRow, index) => {
                 const targetRow = targetRows[index];
+                const before = failures.length;
+                let writableCells = 0;
                 ['name', 'drawingNo', 'quantity'].forEach((key) => {
                     const control = this.getTargetJiguiRelationControl(
                         model,
                         targetRow.rowIndex,
                         key
                     );
-                    if (control) {
-                        this.setCopyTextControl(
-                            control,
-                            sourceRow[key] == null ? '' : sourceRow[key]
-                        );
+                    const value = sourceRow[key] == null ? '' : sourceRow[key];
+                    if (control) writableCells += 1;
+                    if (control &&
+                        (!this.setCopyTextControl(control, value) ||
+                            this.normalizeCopyInputValue(control.value) !==
+                            this.normalizeCopyInputValue(value))) {
+                        failures.push('第' + (index + 1) + '行' + key);
                     }
                 });
+                if (writableCells > 0 && failures.length === before) rowCount += 1;
             });
+            return { status: failures.length ? 'failed' : 'applied',
+                label: '关联明细', rowCount, reason: failures.join('、') };
+        }
+
+        finishCopyWithVerification(panel, doc, session, schema, results) {
+            // 参考单的后续办理信息不属于当前创建页填写项。
+            // 在联动控件生成完毕后，以目标页最终的可编辑栏目为准。
+            const applicable = schema.filter((definition) =>
+                this.isCopySchemaFieldApplicable(doc, definition));
+            const verified = applicable.filter((definition) =>
+                this.verifyCopySchemaField(doc, definition));
+            const failures = applicable.filter((definition) => !verified.includes(definition))
+                .map((definition) => definition.label || definition.key);
+            (results || []).forEach((result) => {
+                if (!result || result.status === 'failed') {
+                    failures.push(result && result.label || '明细/发送部门');
+                }
+            });
+            const rowCount = (results || []).reduce((count, result) =>
+                count + (result && Number(result.rowCount) || 0), 0);
+            if (!verified.length && !rowCount && !failures.length) {
+                failures.push('当前创建页未识别到可复制的填写项，请核对页面');
+            }
+            session.completed = true;
+            this.showNoticeCopyStatus(panel, failures.length
+                ? '未完整填写，请手动补充：' + Array.from(new Set(failures)).join('、')
+                : '填写完成，请仔细核对后提交!', failures.length ? 'warning' : 'success');
+            this.finishFeatureUsage(session.usageOperation,
+                failures.length ? 'failed' : 'success', {
+                    resultCode: failures.length ? 'copy-incomplete' : 'success',
+                    rowCount, fieldCount: verified.length
+                });
+            this.noticeCopySession = null;
         }
 
         async applyJiguiCopyWithoutDiagnostics(
@@ -5976,6 +6313,7 @@
         ) {
             const template = session.template;
             const schema = this.getJiguiCopySchema(template);
+            const results = [];
             let pending = schema.slice();
             await this.waitForCopyDomStable(doc);
             if (!this.isCopyRunCurrent(session, runToken)) return;
@@ -6009,35 +6347,22 @@
                     && passBeforeCount - nextPending.length === 0
                 ) break;
             }
-            await this.applyCopiedJiguiRelationRows(
+            results.push(await this.applyCopiedJiguiRelationRows(
                 doc,
                 template.relationRows
-            );
+            ));
             if (!this.isCopyRunCurrent(session, runToken)) return;
             if (
                 Array.isArray(template.distributionDepartments)
                 && template.distributionDepartments.length
             ) {
-                await this.applyDistributionDepartments(
+                results.push(await this.applyDistributionDepartments(
                     doc,
                     template.distributionDepartments
-                );
+                ));
                 if (!this.isCopyRunCurrent(session, runToken)) return;
             }
-            session.completed = true;
-            this.showNoticeCopyStatus(
-                panel,
-                '填写完成，请仔细核对后提交!',
-                'success'
-            );
-            this.finishFeatureUsage(session.usageOperation, 'success', {
-                resultCode: 'success',
-                rowCount: Array.isArray(template.relationRows)
-                    ? template.relationRows.length
-                    : 0,
-                fieldCount: schema.length
-            });
-            this.noticeCopySession = null;
+            this.finishCopyWithVerification(panel, doc, session, schema, results);
         }
 
         async applyNoticeCopyWithoutDiagnostics(
@@ -6050,12 +6375,13 @@
             const createNoticeType = this.getCreateNoticeType(
                 template.noticeType
             );
-            await this.applyCopySelect(
+            const results = [];
+            results.push(await this.applyCopySelect(
                 doc,
                 ['通知单类型', '通知类型'],
                 createNoticeType,
                 true
-            );
+            ));
             if (!this.isCopyRunCurrent(session, runToken)) return;
             await this.waitForCopyDomStable(doc);
             if (!this.isCopyRunCurrent(session, runToken)) return;
@@ -6099,21 +6425,21 @@
                 this.getCopyPolarity(template.fields.needMaterial)
                     === 'positive'
             ) {
-                await this.applyCopiedMaterialRows(
+                results.push(await this.applyCopiedMaterialRows(
                     doc,
                     template.materialRows,
                     'add'
-                );
+                ));
                 if (!this.isCopyRunCurrent(session, runToken)) return;
                 if (
                     Array.isArray(template.cancelMaterialRows)
                     && template.cancelMaterialRows.length
                 ) {
-                    await this.applyCopiedMaterialRows(
+                    results.push(await this.applyCopiedMaterialRows(
                         doc,
                         template.cancelMaterialRows,
                         'cancel'
-                    );
+                    ));
                     if (!this.isCopyRunCurrent(session, runToken)) return;
                 }
             }
@@ -6122,31 +6448,14 @@
                 Array.isArray(template.distributionDepartments)
                 && template.distributionDepartments.length
             ) {
-                await this.applyDistributionDepartments(
+                results.push(await this.applyDistributionDepartments(
                     doc,
                     template.distributionDepartments
-                );
+                ));
                 if (!this.isCopyRunCurrent(session, runToken)) return;
             }
 
-            session.completed = true;
-            this.showNoticeCopyStatus(
-                panel,
-                '填写完成，请仔细核对后提交!',
-                'success'
-            );
-            this.finishFeatureUsage(session.usageOperation, 'success', {
-                resultCode: 'success',
-                rowCount:
-                    (Array.isArray(template.materialRows)
-                        ? template.materialRows.length
-                        : 0) +
-                    (Array.isArray(template.cancelMaterialRows)
-                        ? template.cancelMaterialRows.length
-                        : 0),
-                fieldCount: schema.length
-            });
-            this.noticeCopySession = null;
+            this.finishCopyWithVerification(panel, doc, session, schema, results);
         }
 
         async applyNoticeCopyTemplate(panel, doc, session, runToken) {
@@ -6648,31 +6957,12 @@
                 || this.profile.receiveTasks === false
                 || !this.tasks.length
             ) return;
-            const checkValue = this.extractLabelValue(iframeDoc, ['校核']);
-            const approveValue = this.extractLabelValue(iframeDoc, ['批准']);
-            const isCompletedValue = (value, pendingWords) => {
-                const normalized = String(value || '')
-                    .replace(/\u00a0/g, '')
-                    .replace(/\s+/g, '')
-                    .trim();
-                return !!normalized && !pendingWords.some((word) =>
-                    normalized.includes(String(word).replace(/\s+/g, ''))
-                );
-            };
-            const completedTypes = new Set();
-            if (isCompletedValue(checkValue, ['未校核', '待校核'])) completedTypes.add('待校核');
-            if (isCompletedValue(approveValue, ['未批准', '待批准'])) completedTypes.add('待批准');
-            if (!completedTypes.size) return;
-
             const matches = this.tasks.filter((task) =>
-                task.docNo === docNo && completedTypes.has(task.taskType)
+                task.docNo === docNo && this.getTaskDetailCompletion(task, iframeDoc)
             );
             matches.forEach((task) => {
-                this.request('POST', '/tasks/' + encodeURIComponent(task.id) + '/complete', {
-                    source: 'original-system-status'
-                }).then(() => this.refreshTasks(false)).catch((error) => {
-                    console.warn('[待办] 同步完成状态失败:', error.message);
-                });
+                this.autoCompleteTask(task, 'original-system-status',
+                    'detail-status', task.url, null);
             });
         }
     }
@@ -7253,6 +7543,10 @@
         }
 
         switchTab(tab) {
+            ++this.renderToken;
+            ++this.zzlApprovalRenderToken;
+            this.isLoading = false;
+            if (this._els.searchBtn) this._els.searchBtn.disabled = false;
             const prevTab = this.currentTab;
             const prevSelectedType = prevTab ? this.getSelectedSearchTypeForTab(prevTab) : null;
             if (prevTab) this.saveTabViewState(prevTab);
@@ -8075,6 +8369,9 @@
                 alert('请输入搜索内容');
                 return;
             }
+            const sourceTab = this.currentTab;
+            const token = ++this.renderToken;
+            ++this.zzlApprovalRenderToken;
             this.isLoading = true;
             if (this._els.searchBtn) this._els.searchBtn.disabled = true;
             const resultDiv = this._els.searchResult;
@@ -8109,14 +8406,17 @@
 
             searchPromise
                 .then(results => {
+                    if (token !== this.renderToken || sourceTab !== this.currentTab) return;
                     console.log('搜索完成，找到', results.rows.length, '条结果');
-                    this.displayResults(results, searchType, searchContent);
+                    return this.displayResults(results, searchType, searchContent);
                 })
                 .catch(error => {
+                    if (token !== this.renderToken || sourceTab !== this.currentTab) return;
                     console.error('搜索失败:', error);
                     if (this._els.searchResult) this._els.searchResult.innerHTML = '<div style="color: red; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">搜索失败: ' + error.message + '</div>';
                 })
                 .finally(() => {
+                    if (token !== this.renderToken) return;
                     this.isLoading = false;
                     if (this._els.searchBtn) this._els.searchBtn.disabled = false;
                 });
@@ -8172,10 +8472,15 @@
                     url: url,
                     headers: headers,
                     responseType: 'arraybuffer',
+                    timeout: 15000,
+                    ontimeout: () => reject(new Error('页面读取超时，请重试')),
+                    onabort: () => reject(new Error('页面读取已取消')),
                     onload: (response) => {
                         if (response.status === 200) {
-                            const decoder = new TextDecoder('gb2312');
-                            resolve(decoder.decode(new Uint8Array(response.response)));
+                            try {
+                                const decoder = new TextDecoder('gb2312');
+                                resolve(decoder.decode(new Uint8Array(response.response)));
+                            } catch (error) { reject(error); }
                         } else {
                             reject(new Error('请求失败: ' + response.status));
                         }
@@ -8596,6 +8901,12 @@
                         );
                     });
                 }).catch((error) => {
+                    if (approvalToken === this.zzlApprovalRenderToken &&
+                        this.currentTab === 'zhiling') {
+                        createdColumns.forEach((item) => this.applyZzlApprovalStage(
+                            resultDiv, rowIndex, item.columnIndex, '状态读取失败'
+                        ));
+                    }
                     console.warn(
                         '[制造令审批状态] 读取失败，编号=' + orderIdMatch[0] + ':',
                         error && error.message ? error.message : error
@@ -8861,14 +9172,13 @@
                 // 新页先在脱离页面的容器中补齐状态。旧页保持原样，整批完成后一次替换。
                 const staging = resultDiv.ownerDocument.createElement('div');
                 staging.innerHTML = html;
-                this.enrichZzlApprovalStatuses(
+                return this.enrichZzlApprovalStatuses(
                     parseResult,
                     staging,
                     approvalToken
                 ).then(() => {
                     commitResult(staging.innerHTML);
                 });
-                return;
             }
             commitResult(html);
         }
@@ -8885,6 +9195,9 @@
             }
 
             const token = ++this.renderToken;
+            ++this.zzlApprovalRenderToken;
+            this.isLoading = false;
+            if (this._els.searchBtn) this._els.searchBtn.disabled = false;
 
             const restore = () => {
                 if (paginationDiv) {
@@ -8933,6 +9246,7 @@
 
             searchPromise
                 .then(pageResult => {
+                    if (this.renderToken !== token || sourceTab !== this.currentTab) return;
                     pageResult.sourceTab = pageResult.sourceTab || sourceTab;
                     if (pageResult.rows.length === 0 && pageNum > 1) {
                         console.log('第 ' + pageNum + ' 页无数据，回到第 1 页');
@@ -8965,7 +9279,7 @@
                             const finalTotalPages = p1.totalPages || preservedTotalPages || 1;
                             const finalTotalCount = p1.totalCount || preservedTotalCount || p1.rows.length;
                             if (this.renderToken !== token) return;
-                            this.displayResults({
+                            return this.displayResults({
                                 rows: p1.rows,
                                 headers: p1.headers,
                                 totalPages: finalTotalPages,
@@ -8980,7 +9294,7 @@
                     const finalTotalPages = Math.max(preservedTotalPages || 0, pageResult.totalPages || 0) || 1;
                     const finalTotalCount = Math.max(preservedTotalCount || 0, pageResult.totalCount || 0) || pageResult.rows.length;
                     if (this.renderToken !== token) return;
-                    this.displayResults({
+                    return this.displayResults({
                         rows: pageResult.rows,
                         headers: pageResult.headers,
                         totalPages: finalTotalPages,
@@ -10286,6 +10600,7 @@
                         // 跨域情况，无法直接访问内容
                         return;
                     }
+                    installBusinessSpaceGuard(iframeDoc);
 
                         // 通知单详情页显示“通知待办”，并根据原系统校核/批准字段同步完成状态。
                         this.todoManager.handleDetailLoaded(panel, contentIframe, iframeDoc, fullUrl);
@@ -10699,7 +11014,7 @@
         }
 
         normalizeZzlTransferText(value) {
-            return String(value == null ? '' : value)
+            return normalizeBusinessSpaces(value)
                 .replace(/\u00a0/g, ' ')
                 .replace(/[\r\n\t]+/g, ' ')
                 .replace(/\s+/g, '')
@@ -11057,8 +11372,7 @@
                 .sort((a, b) => a.distance - b.distance);
         }
 
-        writeZzlExplanation(doc, detailTable, value) {
-            if (!value) return false;
+        findZzlExplanationControl(doc, detailTable) {
             const candidates = this.getZzlExplanationCandidates(doc, detailTable);
             for (const candidate of candidates) {
                 const cells = Array.from(candidate.row && candidate.row.cells
@@ -11066,22 +11380,18 @@
                     : []);
                 const labelIndex = cells.indexOf(candidate.labelCell);
                 const valueCells = labelIndex >= 0 ? cells.slice(labelIndex + 1) : [];
-                for (const cell of valueCells) {
-                    const textarea = cell.querySelector('textarea');
-                    const control = textarea || this.findZzlWritableControl(cell);
-                    if (control && this.setZzlControlValue(control, value)) return true;
-                }
-                // 个别页面把“说明”和输入框拆在相邻容器中，向后做一次短距离查找。
-                let node = candidate.labelCell;
-                for (let i = 0; i < 12 && node; i += 1) {
-                    node = node.nextElementSibling;
-                    if (!node) break;
-                    const textarea = node.querySelector && node.querySelector('textarea');
-                    const control = textarea || this.findZzlWritableControl(node);
-                    if (control && this.setZzlControlValue(control, value)) return true;
-                }
+                // 只取说明的值单元格，不能跨过只读说明去写其他栏目。
+                const control = this.findZzlWritableControl(valueCells[0]
+                    || candidate.labelCell.nextElementSibling);
+                if (control) return control;
             }
-            return false;
+            return null;
+        }
+
+        writeZzlExplanation(doc, detailTable, value) {
+            if (!value) return false;
+            const control = this.findZzlExplanationControl(doc, detailTable);
+            return Boolean(control && this.setZzlControlValue(control, value));
         }
 
         getZzlPostDetailRows(info, lastDataRowIndex) {
@@ -11463,9 +11773,13 @@
             });
         }
 
+        isZzlControlWritable(control) {
+            return TodoManager.prototype.isCopyControlWritable.call(TodoManager.prototype, control);
+        }
+
         setZzlControlValue(control, value) {
-            if (!control) return false;
-            const text = String(value == null ? '' : value);
+            if (!this.isZzlControlWritable(control)) return false;
+            const text = normalizeBusinessSpaces(value);
             if (control.tagName === 'SELECT') {
                 const normalized = this.normalizeZzlTransferText(text);
                 const option = Array.from(control.options || []).find((item) =>
@@ -11484,12 +11798,17 @@
             ['input', 'change', 'blur'].forEach((type) => {
                 control.dispatchEvent(new Event(type, { bubbles: true }));
             });
-            return true;
+            if (control.tagName === 'SELECT') {
+                const selected = control.options && control.options[control.selectedIndex];
+                return Boolean(selected && this.normalizeZzlTransferText(selected.textContent || selected.value)
+                    === this.normalizeZzlTransferText(text));
+            }
+            return String(control.value || '').replace(/\r\n?/g, '\n') === text.replace(/\r\n?/g, '\n');
         }
 
         setZzlDisplayCellValue(cell, value) {
             if (!cell) return false;
-            const text = String(value == null ? '' : value);
+            const text = normalizeBusinessSpaces(value);
             const walker = cell.ownerDocument.createTreeWalker(
                 cell,
                 NodeFilter.SHOW_TEXT
@@ -11515,7 +11834,7 @@
             if (!cell) return null;
             return Array.from(cell.querySelectorAll('input, textarea, select')).find((control) => {
                 const type = String(control.type || '').toLowerCase();
-                return !control.disabled && !control.readOnly &&
+                return this.isZzlControlWritable(control) &&
                     !['button', 'submit', 'reset', 'hidden', 'checkbox', 'radio'].includes(type);
             }) || null;
         }
@@ -11666,8 +11985,17 @@
                 );
                 return;
             }
+            if (targetRows.length < data.rows.length) {
+                // 容量不足时在写入前终止，避免静默截断或覆盖半张表。
+                finishUsage('failed', 'target-rows-insufficient');
+                this.showZzlTransferStatus(panel,
+                    '尚未写入：来源有' + data.rows.length + '行，当前创建页仅有' +
+                    targetRows.length + '行，请先增加明细行后重试。', 'warning');
+                return;
+            }
 
             let filledRows = 0;
+            const failures = [];
             targetRows.forEach((targetRow, index) => {
                 const sourceRow = data.rows[index] || {
                     serial: '',
@@ -11676,51 +12004,51 @@
                     quantity: '',
                     remark: ''
                 };
-                let changed = false;
+                const beforeFailures = failures.length;
+                let writableCells = 0;
                 const serialColumnIndex = targetInfo.indexMap.serial;
                 if (serialColumnIndex >= 0) {
                     const serialControl = this.findZzlWritableControl(
                         targetRow.cells[serialColumnIndex]
                     );
-                    if (serialControl && this.setZzlControlValue(
-                        serialControl,
-                        sourceRow.serial
-                    )) {
-                        changed = true;
-                    } else if (!serialControl && this.setZzlDisplayCellValue(
-                        targetRow.cells[serialColumnIndex],
-                        sourceRow.serial
-                    )) {
-                        changed = true;
+                    if (serialControl && !this.setZzlControlValue(serialControl, sourceRow.serial)
+                        && index < data.rows.length) {
+                        failures.push('第' + (index + 1) + '行序号');
                     }
                 }
                 ['description', 'drawing', 'quantity', 'remark'].forEach((key) => {
+                    const label = { description: '描述', drawing: '图号',
+                        quantity: '数量', remark: '备注' }[key];
                     const columnIndex = targetInfo.indexMap[key];
-                    if (columnIndex < 0) return;
+                    const value = String(sourceRow[key] == null ? '' : sourceRow[key]);
+                    if (columnIndex < 0) {
+                        return;
+                    }
                     const control = this.findZzlWritableControl(
                         targetRow.cells[columnIndex]
                     );
-                    if (control && this.setZzlControlValue(
-                        control,
-                        sourceRow[key]
-                    )) changed = true;
+                    if (control) {
+                        writableCells += 1;
+                        if (!this.setZzlControlValue(control, value)) {
+                            failures.push('第' + (index + 1) + '行' + label);
+                        }
+                    }
                 });
-                if (changed && index < data.rows.length) filledRows += 1;
+                if (index < data.rows.length && writableCells > 0
+                    && failures.length === beforeFailures) filledRows += 1;
             });
 
             let filledFields = 0;
-            Object.keys(data.fields).forEach((label) => {
-                if (this.fillZzlFieldByLabel(doc, label, data.fields[label])) filledFields += 1;
-            });
-            Object.keys(data.extraFields || {}).forEach((label) => {
-                if (this.fillZzlFieldByLabel(
-                    doc,
-                    label,
-                    data.extraFields[label]
-                )) filledFields += 1;
-            });
-            Object.keys(data.notes).forEach((label) => {
-                if (this.fillZzlFieldByLabel(doc, label, data.notes[label])) filledFields += 1;
+            const filledFieldControls = new Set();
+            const fields = Object.assign({}, data.fields, data.extraFields, data.notes);
+            Object.keys(fields).forEach((label) => {
+                if (!String(fields[label] == null ? '' : fields[label]).trim()) return;
+                const control = this.findZzlWritableControlByLabel(doc, label);
+                if (!control) return;
+                if (this.setZzlControlValue(control, fields[label])) {
+                    if (!filledFieldControls.has(control)) filledFields += 1;
+                    filledFieldControls.add(control);
+                } else failures.push(label);
             });
             this.repairZzlPaintTargetFields(doc);
             const explanationWritten = target
@@ -11735,15 +12063,29 @@
                     data.explanation
                 );
             if (explanationWritten) {
-                filledFields += 1;
+                const control = target
+                    ? this.findZzlExplanationControl(doc, target.table)
+                    : this.findZzlWritableControlByLabel(doc, '说明');
+                if (!filledFieldControls.has(control)) filledFields += 1;
+            } else if (data.explanation && (target
+                ? this.findZzlExplanationControl(doc, target.table)
+                : this.findZzlWritableControlByLabel(doc, '说明'))) {
+                failures.push('说明');
+            }
+
+            if (!filledRows && !filledFields && !failures.length) {
+                failures.push('当前创建页未识别到可写入的填写项，请核对页面');
             }
 
             this.showZzlTransferStatus(
                 panel,
-                '写入完成，请仔细核对后提交',
-                'success'
+                failures.length ? '未完整写入，请核对并补充：' +
+                    Array.from(new Set(failures)).join('、')
+                    : '写入完成，请仔细核对后提交',
+                failures.length ? 'warning' : 'success'
             );
-            finishUsage('success', 'success', {
+            finishUsage(failures.length ? 'failed' : 'success',
+                failures.length ? 'write-incomplete' : 'success', {
                 rowCount: filledRows,
                 fieldCount: filledFields
             });
@@ -11903,6 +12245,9 @@
             const preserveSearchType = options && options.preserveSearchType ? options.preserveSearchType : null;
             // 每次渲染首页都更新 token，用于让正在进行的异步请求失效
             const token = ++this.renderToken;
+            ++this.zzlApprovalRenderToken;
+            this.isLoading = false;
+            if (this._els.searchBtn) this._els.searchBtn.disabled = false;
             const tabUrls = {
                 'jigui': 'http://10.16.88.34/jigui/',
                 'zhiling': 'http://10.16.88.34/zzl/',  // 制造令模块
@@ -11973,7 +12318,7 @@
                     // 保存搜索状态，供分页使用
                     this.currentSearchContent = '';
                     this.currentSearchType = 'default';
-                    this.displayResults(parseResult, 'default', '');
+                    const rendered = this.displayResults(parseResult, 'default', '');
                     if (preserveSearchType) {
                         this.updateSearchOptions(tab, preserveSearchType);
                         const state = this.tabLastViewState.get(tab) || {};
@@ -11982,6 +12327,7 @@
                         }));
                     }
                     console.log(tab + ' 首页加载完成，' + parseResult.rows.length + ' 条');
+                    return rendered;
                 })
                 .catch(err => {
                     console.error('加载首页失败:', err);
@@ -12043,13 +12389,18 @@
                         'Cache-Control': 'max-age=0'
                     },
                     responseType: 'arraybuffer',
+                    timeout: 15000,
+                    ontimeout: () => reject(new Error('制造令搜索超时，请重试')),
+                    onabort: () => reject(new Error('制造令搜索已取消')),
                     onload: (response) => {
                         if (response.status === 200) {
-                            const decoder = new TextDecoder('gb2312');
-                            const html = decoder.decode(new Uint8Array(response.response));
-                            const parseResult = this.parseResponse(html, options);
-                            parseResult.sourceTab = 'zhiling';
-                            resolve(parseResult);
+                            try {
+                                const decoder = new TextDecoder('gb2312');
+                                const html = decoder.decode(new Uint8Array(response.response));
+                                const parseResult = this.parseResponse(html, options);
+                                parseResult.sourceTab = 'zhiling';
+                                resolve(parseResult);
+                            } catch (error) { reject(error); }
                         } else {
                             reject(new Error('请求失败: ' + response.status));
                         }
