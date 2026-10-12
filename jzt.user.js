@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.62
+// @version      3.6.63
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -4915,7 +4915,8 @@
                 {
                     key: 'warrantyReplacementDetail',
                     label: '质保书更换信息说明',
-                    aliases: ['质保书更换信息', '是否更换质保书'],
+                    aliases: ['质保书更换信息说明', '质保书信息说明',
+                        '质保书更换信息', '是否更换质保书'],
                     value: fields.warrantyReplacementDetail,
                     preferredType: 'textarea'
                 },
@@ -4929,7 +4930,7 @@
                 {
                     key: 'partSteelSealDetail',
                     label: '部件钢印说明',
-                    aliases: ['部件钢印', '是否更换部件钢印'],
+                    aliases: ['部件钢印说明', '部件钢印', '是否更换部件钢印'],
                     value: fields.partSteelSealDetail,
                     preferredType: 'textarea'
                 },
@@ -5156,7 +5157,18 @@
 
         getCopySchemaControls(doc, definition) {
             const controls = this.getCopyFieldControls(doc, definition.aliases);
-            if (String(definition.key || '').startsWith('generic:')) {
+            // 同一栏目可能同时有“是/否”和说明框。说明不能因找到
+            // 单选按钮就被视为可填写；填写、验证与适用性使用同一类型范围。
+            const group = { select: 'selects', textarea: 'textareas',
+                radio: 'radios', checkbox: 'checkboxes' }[definition.preferredType];
+            if (group) {
+                Object.keys(controls).forEach((key) => {
+                    if (key !== group) controls[key] = [];
+                });
+            }
+            if (String(definition.key || '').startsWith('generic:')
+                || definition.key === 'warrantyReplacementDetail'
+                || definition.key === 'partSteelSealDetail') {
                 Object.keys(controls).forEach((key) => {
                     controls[key] = controls[key].filter((control) =>
                         this.isCopyControlInExactField(doc, control, definition.aliases));
