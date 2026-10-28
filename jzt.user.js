@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         制造令/机规/通知单搜索工具
 // @namespace    http://tampermonkey.net/
-// @version      3.6.63
+// @version      3.6.71
 // @description  快捷查询制造令/机规/通知单，支持完整GBK、跨模块链接修复及机规/通知单待办
 // @author       10432987
 // @match        http://10.16.88.34/notice/
@@ -7904,7 +7904,9 @@
                                 const panelId = this.openDetailPanel(
                                     href,
                                     linkText,
-                                    sourceTab
+                                    sourceTab,
+                                    { zzlSourceCategory: sourceTab === 'zhiling'
+                                        ? this.getZzlLinkSourceCategory(link) : '' }
                                 );
                                 if (!panelId) {
                                     throw new Error('未能创建详情窗口');
@@ -9516,6 +9518,22 @@
             }, 5000);
         }
 
+        getInitialDetailPanelTitle(href, titleText, sourceTab) {
+            const originalTitle = String(titleText || '详情页面');
+            let waitForPageTitle = false;
+            try {
+                const pageUrl = new URL(this.resolveModuleUrl(href, sourceTab));
+                const path = pageUrl.pathname.toLowerCase();
+                waitForPageTitle = pageUrl.origin === 'http://10.16.88.34'
+                    && path.startsWith('/zzl/') && path.endsWith('.asp')
+                    && path !== '/zzl/viewtotal.asp'
+                    && !/\/(?:create|add)[^/]*\.asp$/.test(path)
+                    && !/^(?:创建|新建)/.test(originalTitle.trim());
+            } catch (error) {}
+            return { originalTitle, waitForPageTitle,
+                title: waitForPageTitle ? '' : originalTitle };
+        }
+
         openDetailPanel(href, titleText, sourceTab, options = {}) {
             if (!href) {
                 return;
@@ -9523,6 +9541,7 @@
 
             // 生成唯一窗口ID
             const panelId = 'jigui-detail-panel-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+            const initialTitle = this.getInitialDetailPanelTitle(href, titleText, sourceTab);
 
             // 更新说明图片使用自身尺寸；普通详情页继续沿用用户保存的窗口尺寸。
             const savedState = this.loadDetailPanelState();
@@ -9594,6 +9613,7 @@
             const detailPanel = document.createElement('div');
             detailPanel.id = panelId;
             detailPanel.dataset.panelId = panelId;
+            detailPanel.dataset.zzlSourceHint = String(options && options.zzlSourceCategory || '');
             detailPanel.dataset.todoSourceTaskId = String(
                 options && options.todoTaskId ? options.todoTaskId : ''
             );
@@ -9626,6 +9646,11 @@
                 opacity: 1 !important;
             `;
 
+            if (initialTitle.waitForPageTitle) {
+                detailPanel.dataset.zzlTitlePending = '1';
+                detailPanel.dataset.zzlOriginalTitle = initialTitle.originalTitle;
+            }
+
             // 初始化窗口状态
             const panelState = {
                 isMinimized: false,
@@ -9643,7 +9668,7 @@
 
             detailPanel.innerHTML = `
                 <div class="detail-header" style="background: rgb(30, 80, 220); color: white; height: 40px; padding: 0; border-radius: 0; display: flex; justify-content: space-between; align-items: center; cursor: move; min-height: 40px; box-sizing: border-box;">
-                    <span class="detail-title" style="font-weight: bold; line-height: 1; display: flex; align-items: center; padding-left: 0; margin-left: -8px;">📄 ${titleText || '详情页面'}</span>
+                    <span class="detail-title" style="font-weight: bold; line-height: 1; display: flex; align-items: center; padding-left: 0; margin-left: -8px;"></span>
                     <div style="display: flex; align-items: center; gap: 0; height: 100%; margin-right: -6px;">
                         <button class="detail-take-no-btn" type="button" title="打开取号页面" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">去取号</button>
                         <button class="detail-copy-notice-btn" type="button" title="按当前内容复制开单" style="display: none; align-items: center; justify-content: center; height: 28px; padding: 0; margin-right: 26px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 14px; font-weight: 800; white-space: nowrap;">复制开单</button>
@@ -9805,8 +9830,9 @@
 
             // 更新标题
             const titleElement = detailPanel.querySelector('.detail-title');
-            if (titleElement && titleText) {
-                titleElement.textContent = '📄 ' + titleText;
+            if (titleElement) {
+                titleElement.textContent = initialTitle.waitForPageTitle
+                    ? '' : '📄 ' + initialTitle.title;
             }
 
             // 确保弹窗可见（移除调试日志，减少控制台输出）
@@ -9915,8 +9941,8 @@
                 this.detailPanelStates.delete(panelId);
                 if (this.zzlActiveCreatePanelId === panelId) {
                     this.zzlActiveCreatePanelId = '';
-                    this.refreshZzlTransferButtons();
                 }
+                this.refreshZzlTransferButtons();
 
                 // 如果关闭的是当前detailPanel，清空引用
                 if (this.detailPanel && this.detailPanel.id === panelId) {
@@ -10607,9 +10633,16 @@
             const loadHandler = () => {
                 try {
                     // load 事件触发时同域文档已可读取，无需再额外等待。
-                    const iframeDoc = contentIframe.contentDocument || contentIframe.contentWindow?.document;
+                    let iframeDoc;
+                    try {
+                        iframeDoc = contentIframe.contentDocument || contentIframe.contentWindow?.document;
+                    } catch (error) {
+                        this.updateZzlDetailPageTitle(panelId, null, fullUrl);
+                        return;
+                    }
                     if (!iframeDoc) {
                         // 跨域情况，无法直接访问内容
+                        this.updateZzlDetailPageTitle(panelId, null, fullUrl);
                         return;
                     }
                     installBusinessSpaceGuard(iframeDoc);
@@ -10618,6 +10651,8 @@
                         this.todoManager.handleDetailLoaded(panel, contentIframe, iframeDoc, fullUrl);
                         // 识别制造令详情页或分项创建页，并立即显示“读取/写入”按钮。
                         this.configureZzlTransferPanel(panelId, iframeDoc, fullUrl);
+                        // 制造令部套详情以原网页 title 命名，不再使用开单人姓名。
+                        this.updateZzlDetailPageTitle(panelId, iframeDoc, fullUrl);
 
                         // 弹窗内链接统一在新弹窗中打开，不新开浏览器标签（支持多级弹窗）
                         const self = this;
@@ -11295,23 +11330,199 @@
             return candidates[0];
         }
 
+        updateZzlDetailPageTitle(panelId, iframeDoc, fullUrl) {
+            const panel = this.detailPanels.get(panelId);
+            if (!panel) return;
+            const titleElement = panel.querySelector('.detail-title');
+            if (!titleElement) return;
+            const pending = panel.dataset.zzlTitlePending === '1';
+            const finishPendingTitle = (title) => {
+                if (!pending) return;
+                titleElement.textContent = title ? '📄 ' + title : '';
+                titleElement.title = title;
+                delete panel.dataset.zzlTitlePending;
+                delete panel.dataset.zzlOriginalTitle;
+            };
+            if (!iframeDoc) {
+                finishPendingTitle('');
+                return;
+            }
+            if (panel.dataset.zzlRole === 'create') {
+                finishPendingTitle(panel.dataset.zzlOriginalTitle || '创建制造令');
+                return;
+            }
+            let pageUrl;
+            try {
+                pageUrl = new URL(iframeDoc.URL || fullUrl, window.location.href);
+            } catch (error) {
+                finishPendingTitle('');
+                return;
+            }
+            const path = pageUrl.pathname.toLowerCase();
+            // iframe 初建时可能先触发 about:blank 的 load，不能显示回姓名。
+            if (pageUrl.href === 'about:blank') return;
+            // 按实际页面模块判断，防止跨模块导航时修改机规/通知单标题。
+            // 制造令总览仍保留项目名称，创建页仍保留原来的创建窗口名称。
+            if (pageUrl.origin !== 'http://10.16.88.34'
+                || !path.startsWith('/zzl/') || path === '/zzl/'
+                || path === '/zzl/viewtotal.asp') {
+                finishPendingTitle(panel.dataset.zzlOriginalTitle || '详情页面');
+                return;
+            }
+            const pageTitle = String(iframeDoc.title || '').trim();
+            if (!pageTitle) {
+                // 原网页 title 未读到时继续留空，不显示姓名或占位文字。
+                finishPendingTitle('');
+                return;
+            }
+            // 只取 title，不读取正文标题；使用纯文本赋值，保留完整标题。
+            titleElement.textContent = '📄 ' + pageTitle;
+            titleElement.title = pageTitle;
+            delete panel.dataset.zzlTitlePending;
+            delete panel.dataset.zzlOriginalTitle;
+        }
+
+        normalizeZzlPartCategory(value) {
+            const text = this.normalizeZzlTransferText(value)
+                .replace(/[（(【].*$/, '').replace(/清单$/, '');
+            const aliases = { 主机部分: '主机', 主机系统: '主机',
+                主机配套: '主机配套件', 主机进口: '主机进口件',
+                在线监测系统: '在线监测', 装箱系统: '装箱', 装箱铁架: '装箱',
+                励磁: '励磁系统', 工艺装备: '工艺装备明细表' };
+            return aliases[text] || text;
+        }
+
+        getZzlLinkSourceCategory(link) {
+            const cell = link && link.closest('td');
+            const table = cell && cell.closest('table');
+            if (!table || !table.rows.length) return '';
+            const columnIndex = cell.getAttribute('data-result-column-index');
+            if (columnIndex === null) return '';
+            const index = Number(columnIndex);
+            if (!Number.isInteger(index) || index < 0) return '';
+            const header = table.rows[0].cells[index];
+            const category = header ? this.normalizeZzlTransferText(header.textContent) : '';
+            return /^(?:状态|编号|用户|工号|描述|创建)$/.test(category) ? '' : category;
+        }
+
+        getZzlReadSourceContext(doc, fullUrl, hint = '') {
+            if (!doc || !doc.body || doc.querySelector('input[type="password"]')) return null;
+            let url;
+            try {
+                const actualUrl = doc.URL && doc.URL !== 'about:blank' ? doc.URL : fullUrl;
+                url = new URL(actualUrl, window.location.href);
+            } catch (error) { return null; }
+            if (url.origin !== 'http://10.16.88.34'
+                || !url.pathname.toLowerCase().startsWith('/zzl/')) return null;
+            if (url.pathname.toLowerCase() === '/zzl/viewtotal.asp') {
+                return { kind: 'total', category: '', conflict: false };
+            }
+            const known = new Set(['主机', '主机配套件', '在线监测', '冷却器',
+                '主机进口件', '装箱', '励磁系统', '集电/励磁', '励磁机', '集电环装置', '氢系统',
+                '油系统', '水系统', '工艺性消耗材料', '工艺装备明细表']);
+            const hinted = this.normalizeZzlPartCategory(hint);
+            const categories = new Set();
+            const add = (text) => {
+                const category = this.normalizeZzlPartCategory(text);
+                if (category && (known.has(category) || category === hinted)) categories.add(category);
+            };
+            add(doc.title || '');
+            Array.from(doc.querySelectorAll('h1,h2,h3,font[color="red" i],font[color="#ff0000" i],'
+                + '[style*="color: red"],[style*="color:red"],[style*="255, 0, 0"]'))
+                .forEach((element) => {
+                    const text = String(element.innerText || element.textContent || '').trim();
+                    if (text.length <= 40 && !element.querySelector('table')) add(text);
+                });
+            Array.from(doc.querySelectorAll('td,th')).forEach((cell) => {
+                if (cell.querySelector('table')) return;
+                if (/^(?:名称|部套名称|分类名称)$/.test(this.normalizeZzlTransferText(this.getZzlCellValue(cell)))) {
+                    add(this.getZzlCellValue(cell.nextElementSibling));
+                }
+            });
+            // 清单共用“集电/励磁”列，详情页的具体分支才是读取/写入类型。
+            // 分组提示不与其子类型冲突，但两个具体分支之间仍必须严格区分。
+            const branchTypes = new Set(['励磁机', '集电环装置']);
+            const groupCategory = '集电/励磁';
+            const hasBranch = Array.from(categories).some(category => branchTypes.has(category));
+            if (hasBranch) categories.delete(groupCategory);
+            const values = Array.from(categories);
+            const hintMatches = !hinted || !values.length || values[0] === hinted
+                || (hinted === groupCategory && branchTypes.has(values[0]));
+            return { kind: values.length || hinted ? 'part' : 'unknown',
+                category: values[0] || hinted,
+                conflict: values.length > 1 || !hintMatches };
+        }
+
+        findZzlTransferSourceTable(doc, context, source) {
+            if (!source || source.kind !== 'part') return this.findZzlSourceTable(doc, context);
+            if (source.conflict || this.normalizeZzlPartCategory(source.category)
+                !== this.normalizeZzlPartCategory(context.category)) return null;
+            const lookup = Object.assign({}, context, {
+                isMain: Boolean(context.isMain) || this.normalizeZzlPartCategory(context.category) === '主机'
+            });
+            let match = this.findZzlSourceTable(doc, lookup);
+            if (!match) {
+                const candidates = Array.from(doc.querySelectorAll('table')).map((table) =>
+                    ({ table, info: this.getZzlTableInfo(table) })).filter((item) => item.info);
+                // 外层表可能包含同一张内层明细，只保留真正的明细表。
+                const leaves = candidates.filter((item) => !candidates.some((other) =>
+                    other !== item && item.table.contains(other.table)));
+                if (leaves.length > 1) return null;
+                if (leaves.length === 1) {
+                    match = Object.assign({ contextTable: leaves[0].table }, leaves[0]);
+                } else {
+                    const hasUnrecognizedDetailHeader = Array.from(doc.querySelectorAll('tr')).some((row) =>
+                        Array.from(row.cells).filter((cell) => ['序号', '描述', '图号', '数量', '备注']
+                            .includes(this.normalizeZzlTransferText(this.getZzlCellValue(cell)))).length >= 3);
+                    if (hasUnrecognizedDetailHeader) return null;
+                    const row = Array.from(doc.querySelectorAll('tr')).find((item) =>
+                        !item.querySelector('table') && item.cells.length >= 2);
+                    if (!row) return null;
+                    match = { table: row.closest('table'), contextTable: row.closest('table'),
+                        info: null, startRow: row, fieldOnly: true };
+                }
+            }
+            if (match.info) {
+                const header = match.info.rows[match.info.rowIndex];
+                const previousRows = Array.from(doc.querySelectorAll('tr')).filter((row) =>
+                    !row.querySelector('table') && row !== header
+                    && Boolean(row.compareDocumentPosition(header) & Node.DOCUMENT_POSITION_FOLLOWING));
+                let boundary = -1;
+                previousRows.forEach((row, index) => {
+                    const text = this.normalizeZzlTransferText(row.textContent);
+                    if (text.includes('编制') && text.includes('校核') && text.includes('批准')) boundary = index;
+                });
+                match.sourceHeaderRows = previousRows.slice(boundary + 1);
+            }
+            return match;
+        }
+
         configureZzlTransferPanel(panelId, iframeDoc, fullUrl) {
             const panel = this.detailPanels.get(panelId);
             if (!panel) return;
             panel.dataset.zzlRole = '';
             panel.dataset.zzlCategory = '';
             panel.dataset.zzlMain = '0';
+            panel.dataset.zzlSourceKind = '';
+            panel.dataset.zzlSourceCategory = '';
 
             let isZzl = false;
             try {
-                isZzl = new URL(fullUrl, window.location.href).pathname.toLowerCase().startsWith('/zzl/');
+                const actualUrl = iframeDoc.URL && iframeDoc.URL !== 'about:blank' ? iframeDoc.URL : fullUrl;
+                const url = new URL(actualUrl, window.location.href);
+                isZzl = url.origin === 'http://10.16.88.34' && url.pathname.toLowerCase().startsWith('/zzl/');
             } catch (e) {}
             if (!isZzl) {
                 this.refreshZzlTransferButtons();
                 return;
             }
 
-            const createContext = this.detectZzlCreateContext(iframeDoc);
+            let isTotalPage = false;
+            try {
+                const actualUrl = iframeDoc.URL && iframeDoc.URL !== 'about:blank' ? iframeDoc.URL : fullUrl;
+                isTotalPage = new URL(actualUrl, window.location.href).pathname.toLowerCase() === '/zzl/viewtotal.asp';
+            } catch (error) {}
+            const createContext = isTotalPage ? null : this.detectZzlCreateContext(iframeDoc);
             if (createContext) {
                 panel.dataset.zzlRole = 'create';
                 panel.dataset.zzlCategory = createContext.category;
@@ -11325,17 +11536,35 @@
                     }, true);
                 }
             } else {
-                // 详情窗口只有在确实包含制造令明细表时才作为读取源。
+                const source = this.getZzlReadSourceContext(iframeDoc, fullUrl, panel.dataset.zzlSourceHint);
                 const hasDetailTable = Array.from(iframeDoc.querySelectorAll('table'))
                     .some((table) => Boolean(this.getZzlTableInfo(table)));
-                if (hasDetailTable) panel.dataset.zzlRole = 'source';
+                const hasParameterRows = Array.from(iframeDoc.querySelectorAll('tr')).some((row) =>
+                    !row.querySelector('table') && row.cells.length >= 2);
+                if (source && (hasDetailTable || (hasParameterRows
+                    && (source.kind === 'total' || source.kind === 'part')))) {
+                    panel.dataset.zzlRole = 'source';
+                    panel.dataset.zzlSourceKind = source.kind;
+                    panel.dataset.zzlSourceCategory = source.category;
+                }
             }
             this.refreshZzlTransferButtons();
         }
 
         getActiveZzlCreateContext() {
-            const panel = this.detailPanels.get(this.zzlActiveCreatePanelId);
-            if (!panel || panel.dataset.zzlRole !== 'create') return null;
+            const available = (panel) => {
+                const write = panel && panel.querySelector('.detail-zzl-write-btn');
+                return panel && panel.dataset.zzlRole === 'create' && panel.dataset.zzlCategory
+                    && write && !write.disabled && this.todoManager.isCopyControlVisible(write);
+            };
+            let panel = this.detailPanels.get(this.zzlActiveCreatePanelId);
+            if (!available(panel)) {
+                const fallback = Array.from(this.detailPanels.entries()).reverse()
+                    .find((entry) => available(entry[1]));
+                this.zzlActiveCreatePanelId = fallback ? fallback[0] : '';
+                panel = fallback ? fallback[1] : null;
+            }
+            if (!panel) return null;
             return {
                 panel,
                 panelId: panel.id,
@@ -11345,13 +11574,17 @@
         }
 
         refreshZzlTransferButtons() {
+            // 先更新写入按钮，再据其实际可见性决定所有读取按钮。
+            this.detailPanels.forEach((panel) => {
+                const write = panel.querySelector('.detail-zzl-write-btn');
+                if (write) write.style.display = panel.dataset.zzlRole === 'create'
+                    && panel.dataset.zzlCategory ? 'flex' : 'none';
+            });
             const active = this.getActiveZzlCreateContext();
             this.detailPanels.forEach((panel) => {
                 const read = panel.querySelector('.detail-zzl-read-btn');
-                const write = panel.querySelector('.detail-zzl-write-btn');
                 const role = panel.dataset.zzlRole || '';
                 if (read) read.style.display = role === 'source' && active ? 'flex' : 'none';
-                if (write) write.style.display = role === 'create' ? 'flex' : 'none';
             });
         }
 
@@ -11470,6 +11703,8 @@
                     let nextIndex = -1;
                     let nextLength = 0;
                     embeddedLabels.forEach((candidate) => {
+                        // 当前字段值中重复出现自身名称，不是下一字段的起点。
+                        if (candidate === currentLabel) return;
                         const match = findFlexibleLabel(remaining, candidate);
                         if (!match || match.index <= 0) return;
                         if (nextIndex < 0 || match.index < nextIndex) {
@@ -11583,12 +11818,17 @@
             };
         }
 
+        isZzlDetailSerial(value) {
+            return /^\d+(?:[.．。]\d+)*[.．。]?$/.test(this.normalizeZzlTransferText(value));
+        }
+
         extractZzlTransferData(tableMatch, context) {
             if (!tableMatch.info || tableMatch.fieldOnly) {
                 return this.extractZzlFieldOnlyData(tableMatch, context);
             }
             const info = tableMatch.info;
             const rows = [];
+            const readIssues = [];
             let lastDataRowIndex = info.rowIndex;
             let dataRowsStarted = false;
             for (let rowIndex = info.rowIndex + 1; rowIndex < info.rows.length; rowIndex += 1) {
@@ -11600,7 +11840,15 @@
                     const index = info.indexMap[key];
                     return index >= 0 ? this.getZzlCellValue(cells[index]) : '';
                 };
-                const serialIsDetail = /^\d+(?:\.\d+)*$/.test(serial);
+                const serialIsDetail = this.isZzlDetailSerial(serial);
+                // 明细形状的数字开头序号不能静默跳过或误当作区块结束。
+                const detailColumnCount = Math.max(...Object.values(info.indexMap)) + 1;
+                if (!serialIsDetail && /^\d/.test(serial)
+                    && cells.length >= detailColumnCount
+                    && (valueAt('description') || valueAt('drawing'))) {
+                    readIssues.push(serial);
+                    break;
+                }
                 if (serialIsDetail) {
                     dataRowsStarted = true;
                 } else if (!dataRowsStarted) {
@@ -11621,7 +11869,7 @@
 
             const fields = {};
             const excluded = ['工号', '合同号', '项目号', '编号', '序号', '编制', '校核', '批准', '填单人', '创建人', '日期'];
-            const headerRows = [];
+            const headerRows = Array.from(tableMatch.sourceHeaderRows || []);
             const dataHeaderRow = info.rows[info.rowIndex];
             if (tableMatch.contextTable &&
                 tableMatch.contextTable !== info.table &&
@@ -11646,15 +11894,14 @@
             const extraFields = this.collectZzlFieldPairsFromRows(postRows, excluded);
             const notes = {};
             postRows.forEach((row) => {
+                if (row.querySelector('table')) return;
                 const cells = Array.from(row.cells || []);
                 for (let i = 0; i < cells.length - 1; i += 1) {
                     const label = this.normalizeZzlTransferText(this.getZzlCellValue(cells[i]));
                     if (!/(备注|说明|要求|执行信息)/.test(label)) continue;
-                    const value = cells.slice(i + 1)
-                        .map((cell) => this.getZzlCellValue(cell))
-                        .filter(Boolean)
-                        .join('\n')
-                        .trim();
+                    // 已按“标签/值”识别的字段不可被整行备注再次覆盖。
+                    if (Object.prototype.hasOwnProperty.call(extraFields, label)) continue;
+                    const value = this.getZzlCellValue(cells[i + 1]).trim();
                     if (value) notes[label] = value;
                 }
             });
@@ -11667,11 +11914,7 @@
                     ) === '说明'
                 );
                 if (labelIndex < 0) return false;
-                explanation = cells.slice(labelIndex + 1)
-                    .map((cell) => this.getZzlCellValue(cell))
-                    .filter(Boolean)
-                    .join('\n')
-                    .trim();
+                explanation = this.getZzlCellValue(cells[labelIndex + 1]).trim();
                 return Boolean(explanation);
             });
             return {
@@ -11681,6 +11924,7 @@
                 fields,
                 extraFields,
                 notes,
+                readIssues,
                 // 说明为空时必须保持为空；禁止越过当前分项的
                 // “编制/校核/批准”边界向后寻找下一分项说明。
                 explanation,
@@ -11701,6 +11945,8 @@
         }
 
         readZzlTransferData(panelId) {
+            // 本次读取失败时不能误写上一次来源留下的内容。
+            this.zzlTransferBuffer = null;
             const sourcePanel = this.detailPanels.get(panelId);
             const active = this.getActiveZzlCreateContext();
             const usageOperation = this.todoManager.createFeatureUsageOperation(
@@ -11746,7 +11992,22 @@
                 );
                 return;
             }
-            const matched = this.findZzlSourceTable(doc, active);
+            const source = this.getZzlReadSourceContext(doc,
+                iframe && iframe.src, sourcePanel.dataset.zzlSourceHint);
+            if (!source || sourcePanel.dataset.zzlRole !== 'source') {
+                finishUsage('failed', 'source-page-not-readable');
+                this.showZzlTransferStatus(sourcePanel, '当前页面不是可读取的制造令来源。', 'warning');
+                return;
+            }
+            if (source.kind === 'part' && (source.conflict
+                || this.normalizeZzlPartCategory(source.category)
+                    !== this.normalizeZzlPartCategory(active.category))) {
+                finishUsage('failed', 'source-category-mismatch');
+                this.showZzlTransferStatus(sourcePanel, '当前部套与已激活的“'
+                    + active.category + '”创建窗口不一致，请先激活对应的创建窗口。', 'warning');
+                return;
+            }
+            const matched = this.findZzlTransferSourceTable(doc, active, source);
             if (!matched) {
                 finishUsage('failed', 'source-section-not-found');
                 this.showZzlTransferStatus(
@@ -11757,6 +12018,13 @@
                 return;
             }
             const data = this.extractZzlTransferData(matched, active);
+            if (data.readIssues && data.readIssues.length) {
+                finishUsage('failed', 'source-rows-unrecognized');
+                this.showZzlTransferStatus(sourcePanel,
+                    '读取未完成：存在无法识别的明细序号“' + data.readIssues.join('、')
+                        + '”，请核对来源页面，未保留部分读取内容。', 'warning');
+                return;
+            }
             const fieldCount =
                 Object.keys(data.fields || {}).length +
                 Object.keys(data.extraFields || {}).length +
@@ -11810,6 +12078,12 @@
             ['input', 'change', 'blur'].forEach((type) => {
                 control.dispatchEvent(new Event(type, { bubbles: true }));
             });
+            return this.isZzlControlValueEqual(control, text);
+        }
+
+        isZzlControlValueEqual(control, value) {
+            if (!control) return false;
+            const text = normalizeBusinessSpaces(value);
             if (control.tagName === 'SELECT') {
                 const selected = control.options && control.options[control.selectedIndex];
                 return Boolean(selected && this.normalizeZzlTransferText(selected.textContent || selected.value)
@@ -11983,7 +12257,7 @@
                     const serial = this.normalizeZzlTransferText(
                         this.getZzlCellValue(cells[serialIndex])
                     );
-                    if (/^\d+(?:[.．。]\d+)*[.．。]?$/.test(serial)) {
+                    if (this.isZzlDetailSerial(serial)) {
                         targetRows.push({ row, cells, serial });
                     }
                 }
@@ -12052,15 +12326,24 @@
 
             let filledFields = 0;
             const filledFieldControls = new Set();
-            const fields = Object.assign({}, data.fields, data.extraFields, data.notes);
+            // 明确字段对优先于旧缓冲中的备注拼接值。
+            const fields = Object.assign({}, data.notes, data.fields, data.extraFields);
+            const paintLabel = '底漆与中间漆是否特殊要求';
+            const paintValue = String(fields[paintLabel] || '');
+            const paintMatch = /面\s*漆/.exec(paintValue);
+            if (paintMatch && paintMatch.index > 0) {
+                fields[paintLabel] = paintValue.slice(0, paintMatch.index).trim();
+                if (!String(fields['面漆'] || '').trim()) {
+                    fields['面漆'] = paintValue.slice(paintMatch.index + paintMatch[0].length).trim();
+                }
+            }
+            const fieldChecks = [];
             Object.keys(fields).forEach((label) => {
                 if (!String(fields[label] == null ? '' : fields[label]).trim()) return;
                 const control = this.findZzlWritableControlByLabel(doc, label);
                 if (!control) return;
-                if (this.setZzlControlValue(control, fields[label])) {
-                    if (!filledFieldControls.has(control)) filledFields += 1;
-                    filledFieldControls.add(control);
-                } else failures.push(label);
+                this.setZzlControlValue(control, fields[label]);
+                fieldChecks.push({ label, control, value: fields[label] });
             });
             this.repairZzlPaintTargetFields(doc);
             const explanationWritten = target
@@ -12079,11 +12362,20 @@
                     ? this.findZzlExplanationControl(doc, target.table)
                     : this.findZzlWritableControlByLabel(doc, '说明');
                 if (!filledFieldControls.has(control)) filledFields += 1;
+                filledFieldControls.add(control);
             } else if (data.explanation && (target
                 ? this.findZzlExplanationControl(doc, target.table)
                 : this.findZzlWritableControlByLabel(doc, '说明'))) {
                 failures.push('说明');
             }
+
+            // 以所有写入及油漆修复后的最终值为准，既不保留临时误报，也不掩盖真实失败。
+            fieldChecks.forEach(({ label, control, value }) => {
+                if (this.isZzlControlValueEqual(control, value)) {
+                    if (!filledFieldControls.has(control)) filledFields += 1;
+                    filledFieldControls.add(control);
+                } else failures.push(label);
+            });
 
             if (!filledRows && !filledFields && !failures.length) {
                 failures.push('当前创建页未识别到可写入的填写项，请核对页面');
@@ -12239,13 +12531,17 @@
 
             inflight
                 .then(parseResult => {
+                    // 强刷可能已用新请求替换记录；旧预取不能覆盖缓存或清理新请求。
+                    if (this.tabDefaultContentPromises.get(tab) !== inflight) return;
                     this.tabDefaultContentCache.set(tab, parseResult);
                     this.tabDefaultContentPromises.delete(tab);
                     console.log('[预载] 成功:', tab, 'rows=' + ((parseResult && parseResult.rows && parseResult.rows.length) || 0));
                 })
                 .catch(err => {
                     console.error('[预载] 失败:', tab, err);
-                    this.tabDefaultContentPromises.delete(tab);
+                    if (this.tabDefaultContentPromises.get(tab) === inflight) {
+                        this.tabDefaultContentPromises.delete(tab);
+                    }
                 });
         }
 
@@ -12273,7 +12569,7 @@
                 return;
             }
 
-            // 强制刷新：清理缓存和 inflight，直接请求最新首页内容
+            // 强刷使旧请求失去共享状态的写入权；旧回调按 Promise 身份自行丢弃。
             if (forceRefresh) {
                 this.tabDefaultContentCache.delete(tab);
                 this.tabDefaultContentPromises.delete(tab);
@@ -12322,10 +12618,13 @@
 
             loadPromise
                 .then(parseResult => {
-                    this.tabDefaultContentCache.set(tab, parseResult);
-                    this.tabDefaultContentPromises.delete(tab);
+                    if (this.tabDefaultContentPromises.get(tab) === loadPromise) {
+                        this.tabDefaultContentCache.set(tab, parseResult);
+                        this.tabDefaultContentPromises.delete(tab);
+                    }
                     console.log('[标签加载] 成功:', tab, 'rows=' + ((parseResult && parseResult.rows && parseResult.rows.length) || 0));
-                    // 若在这期间又切换了标签，避免旧请求覆盖新标签内容
+                    // 渲染独立校验：复用预取时，其回调可能已正常清理同一个 Promise。
+                    // 不可因 Map 中已无记录就跳过当前视图的渲染。
                     if (this.renderToken !== token) return;
                     // 保存搜索状态，供分页使用
                     this.currentSearchContent = '';
@@ -12343,7 +12642,9 @@
                 })
                 .catch(err => {
                     console.error('加载首页失败:', err);
-                    this.tabDefaultContentPromises.delete(tab);
+                    if (this.tabDefaultContentPromises.get(tab) === loadPromise) {
+                        this.tabDefaultContentPromises.delete(tab);
+                    }
                     if (this.renderToken !== token) return;
                     resultDiv.innerHTML = '<div style="color: red; text-align: center; font-size: 18px; font-family: \"Microsoft YaHei\", \"微软雅黑\", sans-serif !important;">加载首页失败: ' + (err && err.message ? err.message : '') + '</div>';
                 });
